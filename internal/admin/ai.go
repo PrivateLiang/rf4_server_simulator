@@ -87,8 +87,7 @@ func (s *Server) handleAIStatus(w http.ResponseWriter, r *http.Request) {
 		"ai_profile_channel_history_chars", "ai_profile_channel_reply_chars", "ai_profile_channel_reply_soft_chars",
 		"ai_profile_roundtable_context_tokens", "ai_profile_roundtable_context_messages",
 		"ai_profile_roundtable_reply_chars", "ai_profile_roundtable_reply_soft_chars",
-		"ai_memory_inject", "ai_memory_recent", "ai_memory_best", "ai_memory_max_rows",
-		"ai_global_subscribe", "ai_global_subscribe_include_silent"} {
+		"ai_memory_inject", "ai_memory_recent", "ai_memory_best", "ai_memory_max_rows"} {
 		settings[k] = s.db.AISetting(ctx, k, "")
 	}
 	var baseURL, modelID, providerName, masked string
@@ -300,10 +299,6 @@ func (s *Server) handleAISettingsSave(w http.ResponseWriter, r *http.Request) {
 		MemoryRecent  *int  `json:"ai_memory_recent"`
 		MemoryBest    *int  `json:"ai_memory_best"`
 		MemoryMaxRows *int  `json:"ai_memory_max_rows"`
-
-		// 全局回复：打开后所有已接入助手在任何频道都能接话。
-		GlobalSubscribe       *bool `json:"ai_global_subscribe"`
-		GlobalSubscribeSilent *bool `json:"ai_global_subscribe_include_silent"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		httpError(w, 400, "请求格式错误")
@@ -514,12 +509,6 @@ func (s *Server) handleAISettingsSave(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.MemoryMaxRows != nil {
 		set("ai_memory_max_rows", strconv.Itoa(clamp(*req.MemoryMaxRows, 5, 200)))
-	}
-	if req.GlobalSubscribe != nil {
-		set("ai_global_subscribe", boolStr(*req.GlobalSubscribe))
-	}
-	if req.GlobalSubscribeSilent != nil {
-		set("ai_global_subscribe_include_silent", boolStr(*req.GlobalSubscribeSilent))
 	}
 	if err := s.db.AISetSettings(ctx, updates); err != nil {
 		httpError(w, 500, "设置保存失败")

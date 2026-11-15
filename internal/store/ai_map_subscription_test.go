@@ -145,12 +145,13 @@ func TestChannelMapSubscription(t *testing.T) {
 	}
 }
 
-// TestChannelGlobalSubscribe 验证全局开关：默认关，打开后所有已接入 Agent 在任何频道可见。
-func TestChannelGlobalSubscribe(t *testing.T) {
+// TestChannelGlobalScope 验证全局范围：只有被显式加进全局范围的 Agent 才在任何频道可见。
+// 这是「逐个添加」语义 —— 不是一键把所有助手拉进来。
+func TestChannelGlobalScope(t *testing.T) {
 	d := openMapTestDB(t)
 	ctx := context.Background()
 
-	for _, k := range []string{"alpha", "silent1"} {
+	for _, k := range []string{"alpha", "beta"} {
 		if _, _, err := d.AICreateAgent(ctx, AIAgent{
 			Key: k, Display: k, Role: "测试", Prompt: "p", ReplyMode: "social",
 		}, `["map_vibe"]`); err != nil {
@@ -160,46 +161,45 @@ func TestChannelGlobalSubscribe(t *testing.T) {
 			t.Fatalf("接入 %s: %v", k, err)
 		}
 	}
-	// 把 silent1 改成只看不说。
-	if _, err := d.SQL.ExecContext(ctx,
-		`UPDATE ai_agent SET reply_mode='silent' WHERE key='silent1'`); err != nil {
-		t.Fatalf("设置 silent: %v", err)
-	}
 
-	// 默认关：谁都不在。
-	if v := d.AISetting(ctx, "ai_global_subscribe", "0"); v != "0" {
-		t.Fatalf("全局开关默认值应为 0，实际 %q", v)
-	}
+	// 默认：没有任何全局范围成员，谁都不在任何频道。
 	keys, _ := d.AIChannelSubscribed(ctx, "nav1_04")
 	if len(keys) != 0 {
-		t.Fatalf("全局开关默认关时不应有 Agent，实际 %v", keys)
+		t.Fatalf("默认不应有 Agent 在频道里，实际 %v", keys)
+	}
+	keys, _ = d.AIChannelSubscribed(ctx, "nav10_02")
+	if len(keys) != 0 {
+		t.Fatalf("默认不应有 Agent 在频道里，实际 %v", keys)
 	}
 
-	// 打开：social 的 alpha 出现，silent 的不出现（默认不含 silent）。
-	if _, err := d.SQL.ExecContext(ctx,
-		`UPDATE ai_setting SET value='1' WHERE key='ai_global_subscribe'`); err != nil {
-		t.Fatalf("打开全局开关: %v", err)
+	// 只把 alpha 加进全局范围。
+	if err := d.AISetMapAgent(ctx, AIMapKeyGlobal, "alpha", true); err != nil {
+		t.Fatalf("加入全局范围: %v", err)
 	}
+	// alpha 在任何频道都该出现（包括别的图）。
+	for _, ch := range []string{"nav1_04", "nav10_02", "nav12_40"} {
+		keys, _ = d.AIChannelSubscribed(ctx, ch)
+		if !containsKey(keys, "alpha") {
+			t.Errorf("%s 应包含全局范围的 alpha，实际 %v", ch, keys)
+		}
+	}
+	// beta 没被加进全局范围，不该出现。
 	keys, _ = d.AIChannelSubscribed(ctx, "nav1_04")
-	if !containsKey(keys, "alpha") {
-		t.Errorf("全局开关开启后 alpha 应出现，实际 %v", keys)
-	}
-	if containsKey(keys, "silent1") {
-		t.Errorf("默认不应包含 silent 角色，实际 %v", keys)
+	if containsKey(keys, "beta") {
+		t.Errorf("未加入全局范围的 beta 不应出现，实际 %v", keys)
 	}
 
-	// 显式打开 include_silent 后 silent 也出现。
-	if _, err := d.SQL.ExecContext(ctx,
-		`UPDATE ai_setting SET value='1' WHERE key='ai_global_subscribe_include_silent'`); err != nil {
-		t.Fatalf("打开 include_silent: %v", err)
+	// 移出全局范围后立即失效。
+	if err := d.AISetMapAgent(ctx, AIMapKeyGlobal, "alpha", false); err != nil {
+		t.Fatalf("移出全局范围: %v", err)
 	}
 	keys, _ = d.AIChannelSubscribed(ctx, "nav1_04")
-	if !containsKey(keys, "silent1") {
-		t.Errorf("include_silent 开启后 silent1 应出现，实际 %v", keys)
+	if containsKey(keys, "alpha") {
+		t.Errorf("移出后不该再出现 alpha，实际 %v", keys)
 	}
 }
 
-// TestAIListMaps 验证后台地图清单带得出中文名与订阅名单。
+// TestAIListMaps 验证后台范围清单带得出中文名与订阅名单，且全局范围排在最前。
 func TestAIListMaps(t *testing.T) {
 	d := openMapTestDB(t)
 	ctx := context.Background()
@@ -209,8 +209,19 @@ func TestAIListMaps(t *testing.T) {
 		t.Fatalf("AIListMaps: %v", err)
 	}
 	if len(maps) == 0 {
-		t.Fatal("地图清单不应为空")
+		t.Fatal("范围清单不应为空")
 	}
+	// 首项是全局范围。
+	if maps[0].MapKey != AIMapKeyGlobal {
+		t.Fatalf("首项应为全局范围，实际 %q", maps[0].MapKey)
+	}
+	if maps[0].Label == "" {
+		t.Error("全局范围应有显示名")
+	}
+	if maps[0].Count != 0 {
+		t.Errorf("未订阅时全局 Count 应为 0，实际 %d", maps[0].Count)
+	}
+
 	var lake *AIMapInfo
 	for i := range maps {
 		if maps[i].MapKey == "level_001_lake" {
@@ -218,7 +229,7 @@ func TestAIListMaps(t *testing.T) {
 		}
 	}
 	if lake == nil {
-		t.Fatal("地图清单应含 level_001_lake")
+		t.Fatal("范围清单应含 level_001_lake")
 	}
 	if lake.Label != "克马羚诺也湖" {
 		t.Errorf("地图中文名 = %q，期望 克马羚诺也湖", lake.Label)
@@ -235,11 +246,19 @@ func TestAIListMaps(t *testing.T) {
 	if err := d.AISetMapAgent(ctx, "level_001_lake", "alpha", true); err != nil {
 		t.Fatalf("地图订阅: %v", err)
 	}
+	if err := d.AISetMapAgent(ctx, AIMapKeyGlobal, "alpha", true); err != nil {
+		t.Fatalf("全局范围订阅: %v", err)
+	}
 	maps, _ = d.AIListMaps(ctx)
 	for i := range maps {
-		if maps[i].MapKey == "level_001_lake" {
+		switch maps[i].MapKey {
+		case "level_001_lake":
 			if maps[i].Count != 1 || len(maps[i].Agents) != 1 || maps[i].Agents[0] != "甲" {
 				t.Errorf("地图订阅名单 = %+v，期望 1 个「甲」", maps[i])
+			}
+		case AIMapKeyGlobal:
+			if maps[i].Count != 1 || len(maps[i].Agents) != 1 || maps[i].Agents[0] != "甲" {
+				t.Errorf("全局范围名单 = %+v，期望 1 个「甲」", maps[i])
 			}
 		}
 	}
