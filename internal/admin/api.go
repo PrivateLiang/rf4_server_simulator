@@ -123,6 +123,7 @@ func NewServer(cfg config.Admin, db *store.DB, log logger, webFS fs.FS) *Server 
 	mux.HandleFunc("POST /api/ai/agent/update", auth(s.handleAIAgentUpdate))
 	mux.HandleFunc("POST /api/ai/agent/delete", auth(s.handleAIAgentDelete))
 	mux.HandleFunc("POST /api/ai/agent/actor", auth(s.handleAIAgentActor))
+	mux.HandleFunc("POST /api/ai/agent/fishing-talk", auth(s.handleAIAgentFishingTalk))
 	mux.HandleFunc("POST /api/ai/agent/behavior", auth(s.handleAIAgentBehavior))
 	mux.HandleFunc("POST /api/ai/memory/clear", auth(s.handleAIMemoryClear))
 	mux.HandleFunc("GET /api/about", auth(s.handleAbout))

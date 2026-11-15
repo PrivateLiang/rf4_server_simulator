@@ -286,7 +286,7 @@ func (r *Runner) handle(ctx context.Context, t *store.AITask) {
 		}
 	}
 	if mem := r.memoryLine(ctx, agent.Key); mem != "" {
-		system += "\n\n你的近期战绩（你确实钓到过，可以自然提起，但别反复吹）：" + mem
+		system += "\n\n你记得自己上过：" + mem + "。聊到了可以自然提起，别反复吹，也别报精确数字。"
 	}
 	// 玩家主动问渔获时才查全量；平时只给一句常驻简报，压住「空军」这种自相矛盾。
 	if agent.ActorEnabled {
@@ -444,6 +444,9 @@ func (r *Runner) channelPeers(ctx context.Context, channel, self string) string 
 
 // memoryLine 把结构化战绩压成一句 ≤150 字的话，注入 system。
 // 它独立于对话历史，所以聊多久都不会忘了自己上过什么鱼。
+//
+// 只保留「什么鱼 + 什么档次」，不列精确重量：人记得住自己上过一条星的鲈鱼，
+// 记不住「1.20kg」。具体数字归玩家真问时的 catchLine。
 func (r *Runner) memoryLine(ctx context.Context, agentKey string) string {
 	if r.db.AISetting(ctx, "ai_memory_inject", "1") != "1" {
 		return ""
@@ -462,11 +465,11 @@ func (r *Runner) memoryLine(ctx context.Context, agentKey string) string {
 			return
 		}
 		seen[m.ID] = true
-		tag := "星"
 		if m.Kind == "super" {
-			tag = "蓝冠"
+			parts = append(parts, "蓝冠的"+m.FishName)
+		} else {
+			parts = append(parts, "上星的"+m.FishName)
 		}
-		parts = append(parts, fmt.Sprintf("%s %.2fkg %s", tag, float64(m.WeightG)/1000, m.FishName))
 	}
 	for _, m := range recent {
 		add(m)
@@ -477,20 +480,21 @@ func (r *Runner) memoryLine(ctx context.Context, agentKey string) string {
 	if len(parts) == 0 {
 		return ""
 	}
-	return trimRunes(strings.Join(parts, "；"), 150)
+	return trimRunes(strings.Join(parts, "、"), 150)
 }
 
 // catchQuestion 判断玩家是不是在问 AI 自己的渔获。
 // 只有这类问题才查 ai_catch，避免每句话都把战绩塞进上下文。
-// catchBriefLine 把 Agent 自己的渔获压成一句常驻事实，避免角色
+// catchBriefLine 把 Agent 自己的渔获压成一句常驻的定性事实，避免角色
 // 「明明上了鱼却说自己一条没影」。
 //
 // 虚拟上鱼只写 ai_catch 表、不发频道消息（见 gameserver/ai_fishing.go），
-// 所以模型平时完全不知道自己上过鱼；框架注入的状态句又只有「蹲了 N 分钟」，
+// 所以模型平时完全不知道自己上过鱼；框架注入的状态句又只有「在哪、钓什么」，
 // 模型很容易顺着把「蹲很久」演成「空军了」。这里补一句极短的事实把它压住。
 //
-// 只有真的有渔获才注入（0 条时不说话，避免又引导出「我没钓到」）。
-// 玩家明确问渔获时，catchLine 会再给一份完整的，两者不冲突。
+// 刻意不给条数/重量：陪聊不是报账，谁也不会张口就说「累计 7 条、总重 12.4kg」。
+// 玩家真问「钓了多少」时，catchLine 会另给一份带数字的准确记录。
+// 只有真的有渔获才注入（0 条时沉默，避免又引导出「我没钓到」）。
 func (r *Runner) catchBriefLine(ctx context.Context, agentKey string) string {
 	if r.db.AISetting(ctx, "ai_catch_brief_inject", "1") != "1" {
 		return ""
@@ -499,11 +503,8 @@ func (r *Runner) catchBriefLine(ctx context.Context, agentKey string) string {
 	if err != nil || st.Total == 0 {
 		return ""
 	}
-	line := fmt.Sprintf("你确实钓到过鱼：累计 %d 条", st.Total)
-	if st.BestName != "" {
-		line += fmt.Sprintf("，最大 %.2fkg 的%s", float64(st.BestWeightG)/1000, st.BestName)
-	}
-	return trimRunes(line+"。别再说自己空军或一条没上。", 70)
+	// 只在「确实上过鱼」这件事上定性，不给数字，也不替角色评价手气。
+	return "你今天确实上过鱼，不是空军。别再说自己一条没上；具体数目不用记，玩家问了再说。"
 }
 
 func catchQuestion(msg string) bool {

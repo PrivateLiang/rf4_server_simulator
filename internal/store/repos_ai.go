@@ -46,19 +46,20 @@ type AIResult struct {
 
 // AIAgent 是 Agent 注册表的一行。
 type AIAgent struct {
-	Key             string
-	Display         string
-	Role            string
-	ContactUID      int64
-	Prompt          string
-	ToolsJSON       string
-	ThinkingEnabled bool
-	ThinkingEffort  string
-	Enabled         bool
-	Joined          bool   // true 才会出现在游戏社交列表并接收 19/1 私聊
-	ActorEnabled    bool   // true 才维护「在钓鱼」的角色状态
-	ReplyMode       string // social=可主动插话，mention=只有被点名才说，silent=只看不说
-	Talkativeness   int    // 0-100，越高越容易主动接话
+	Key                string
+	Display            string
+	Role               string
+	ContactUID         int64
+	Prompt             string
+	ToolsJSON          string
+	ThinkingEnabled    bool
+	ThinkingEffort     string
+	Enabled            bool
+	Joined             bool   // true 才会出现在游戏社交列表并接收 19/1 私聊
+	ActorEnabled       bool   // true 才维护「在钓鱼」的角色状态
+	ReplyMode          string // social=可主动插话，mention=只有被点名才说，silent=只看不说
+	Talkativeness      int    // 0-100，越高越容易主动接话
+	FishingTalkEnabled bool   // true 才允许「AI 自己上鱼后主动报一句」
 }
 
 func nowTS() float64 { return float64(time.Now().Unix()) }
@@ -288,18 +289,19 @@ func (d *DB) AIAgentByKey(ctx context.Context, key string) (*AIAgent, error) {
 	row := d.SQL.QueryRowContext(ctx, `
 		SELECT key, display, role, contact_uid, prompt, tools_json,
 		       thinking_enabled, thinking_effort, enabled, joined, actor_enabled,
-		       COALESCE(reply_mode,'social'), COALESCE(talkativeness,50)
+		       COALESCE(reply_mode,'social'), COALESCE(talkativeness,50), COALESCE(fishing_talk_enabled,0)
 		FROM ai_agent WHERE key=? AND deleted_ts=0`, key)
 	var a AIAgent
-	var thinking, enabled, joined, actor int
+	var thinking, enabled, joined, actor, fishTalk int
 	if err := row.Scan(&a.Key, &a.Display, &a.Role, &a.ContactUID, &a.Prompt, &a.ToolsJSON,
-		&thinking, &a.ThinkingEffort, &enabled, &joined, &actor, &a.ReplyMode, &a.Talkativeness); err != nil {
+		&thinking, &a.ThinkingEffort, &enabled, &joined, &actor, &a.ReplyMode, &a.Talkativeness, &fishTalk); err != nil {
 		return nil, err
 	}
 	a.ThinkingEnabled = thinking != 0
 	a.Enabled = enabled != 0
 	a.Joined = joined != 0
 	a.ActorEnabled = actor != 0
+	a.FishingTalkEnabled = fishTalk != 0
 	return &a, nil
 }
 
@@ -308,7 +310,7 @@ func (d *DB) AIListAgents(ctx context.Context) ([]AIAgent, error) {
 	rows, err := d.SQL.QueryContext(ctx, `
 		SELECT key, display, role, contact_uid, prompt, tools_json,
 		       thinking_enabled, thinking_effort, enabled, joined, actor_enabled,
-		       COALESCE(reply_mode,'social'), COALESCE(talkativeness,50)
+		       COALESCE(reply_mode,'social'), COALESCE(talkativeness,50), COALESCE(fishing_talk_enabled,0)
 		FROM ai_agent WHERE enabled=1 AND deleted_ts=0 ORDER BY contact_uid DESC`)
 	if err != nil {
 		return nil, err
@@ -317,15 +319,16 @@ func (d *DB) AIListAgents(ctx context.Context) ([]AIAgent, error) {
 	var out []AIAgent
 	for rows.Next() {
 		var a AIAgent
-		var thinking, enabled, joined, actor int
+		var thinking, enabled, joined, actor, fishTalk int
 		if err := rows.Scan(&a.Key, &a.Display, &a.Role, &a.ContactUID, &a.Prompt, &a.ToolsJSON,
-			&thinking, &a.ThinkingEffort, &enabled, &joined, &actor, &a.ReplyMode, &a.Talkativeness); err != nil {
+			&thinking, &a.ThinkingEffort, &enabled, &joined, &actor, &a.ReplyMode, &a.Talkativeness, &fishTalk); err != nil {
 			return nil, err
 		}
 		a.ThinkingEnabled = thinking != 0
 		a.Enabled = enabled != 0
 		a.Joined = joined != 0
 		a.ActorEnabled = actor != 0
+		a.FishingTalkEnabled = fishTalk != 0
 		out = append(out, a)
 	}
 	return out, rows.Err()
@@ -336,7 +339,7 @@ func (d *DB) AIJoinedAgents(ctx context.Context) ([]AIAgent, error) {
 	rows, err := d.SQL.QueryContext(ctx, `
 		SELECT key, display, role, contact_uid, prompt, tools_json,
 		       thinking_enabled, thinking_effort, enabled, joined, actor_enabled,
-		       COALESCE(reply_mode,'social'), COALESCE(talkativeness,50)
+		       COALESCE(reply_mode,'social'), COALESCE(talkativeness,50), COALESCE(fishing_talk_enabled,0)
 		FROM ai_agent WHERE enabled=1 AND joined=1 AND deleted_ts=0 ORDER BY contact_uid DESC`)
 	if err != nil {
 		return nil, err
@@ -345,15 +348,16 @@ func (d *DB) AIJoinedAgents(ctx context.Context) ([]AIAgent, error) {
 	var out []AIAgent
 	for rows.Next() {
 		var a AIAgent
-		var thinking, enabled, joined, actor int
+		var thinking, enabled, joined, actor, fishTalk int
 		if err := rows.Scan(&a.Key, &a.Display, &a.Role, &a.ContactUID, &a.Prompt, &a.ToolsJSON,
-			&thinking, &a.ThinkingEffort, &enabled, &joined, &actor, &a.ReplyMode, &a.Talkativeness); err != nil {
+			&thinking, &a.ThinkingEffort, &enabled, &joined, &actor, &a.ReplyMode, &a.Talkativeness, &fishTalk); err != nil {
 			return nil, err
 		}
 		a.ThinkingEnabled = thinking != 0
 		a.Enabled = enabled != 0
 		a.Joined = joined != 0
 		a.ActorEnabled = actor != 0
+		a.FishingTalkEnabled = fishTalk != 0
 		out = append(out, a)
 	}
 	return out, rows.Err()
@@ -364,18 +368,19 @@ func (d *DB) AIAgentByContactUID(ctx context.Context, uid int64) (*AIAgent, erro
 	row := d.SQL.QueryRowContext(ctx, `
 		SELECT key, display, role, contact_uid, prompt, tools_json,
 		       thinking_enabled, thinking_effort, enabled, joined, actor_enabled,
-		       COALESCE(reply_mode,'social'), COALESCE(talkativeness,50)
+		       COALESCE(reply_mode,'social'), COALESCE(talkativeness,50), COALESCE(fishing_talk_enabled,0)
 		FROM ai_agent WHERE contact_uid=? AND enabled=1 AND joined=1 AND deleted_ts=0`, uid)
 	var a AIAgent
-	var thinking, enabled, joined, actor int
+	var thinking, enabled, joined, actor, fishTalk int
 	if err := row.Scan(&a.Key, &a.Display, &a.Role, &a.ContactUID, &a.Prompt, &a.ToolsJSON,
-		&thinking, &a.ThinkingEffort, &enabled, &joined, &actor, &a.ReplyMode, &a.Talkativeness); err != nil {
+		&thinking, &a.ThinkingEffort, &enabled, &joined, &actor, &a.ReplyMode, &a.Talkativeness, &fishTalk); err != nil {
 		return nil, err
 	}
 	a.ThinkingEnabled = thinking != 0
 	a.Enabled = enabled != 0
 	a.Joined = joined != 0
 	a.ActorEnabled = actor != 0
+	a.FishingTalkEnabled = fishTalk != 0
 	return &a, nil
 }
 
@@ -528,6 +533,18 @@ func (d *DB) AISetAgentBehavior(ctx context.Context, key, mode string, talk int)
 	}
 	_, err := d.SQL.ExecContext(ctx,
 		`UPDATE ai_agent SET reply_mode=?, talkativeness=? WHERE key=? AND deleted_ts=0`, mode, talk, key)
+	return err
+}
+
+// AISetAgentFishingTalk 设置角色是否允许「AI 自己上鱼后主动报一句」。
+// 全局范围只决定在哪能见到它，这个开关决定它能不能报鱼。
+func (d *DB) AISetAgentFishingTalk(ctx context.Context, key string, enabled bool) error {
+	v := 0
+	if enabled {
+		v = 1
+	}
+	_, err := d.SQL.ExecContext(ctx,
+		`UPDATE ai_agent SET fishing_talk_enabled=? WHERE key=? AND deleted_ts=0`, v, key)
 	return err
 }
 
@@ -855,7 +872,7 @@ func (d *DB) ChannelMapKey(ctx context.Context, channel string) (string, bool) {
 const aiChannelAgentRows = `a.key, a.display, COALESCE(a.role,''), a.contact_uid, a.prompt,
 	       COALESCE(a.tools_json,'[]'), COALESCE(a.thinking_enabled,0),
 	       COALESCE(a.thinking_effort,''), COALESCE(a.enabled,1), COALESCE(a.joined,0),
-	       COALESCE(a.actor_enabled,0), COALESCE(a.reply_mode,'social'), COALESCE(a.talkativeness,50)`
+	       COALESCE(a.actor_enabled,0), COALESCE(a.reply_mode,'social'), COALESCE(a.talkativeness,50), COALESCE(a.fishing_talk_enabled,0)`
 
 // AIMapKeyGlobal 是全局范围的 map_key：在这个范围里的 Agent 在任何频道都能发言。
 // 它是「逐个添加」出来的 —— 加进这个范围的才常驻，不加就还是只在订阅的地图/频道出现。
@@ -899,16 +916,17 @@ func (d *DB) AIChannelAgents(ctx context.Context, channel string) ([]AIAgent, er
 	var out []AIAgent
 	for rows.Next() {
 		var a AIAgent
-		var te, en, joined, actor int
+		var te, en, joined, actor, fishTalk int
 		if err := rows.Scan(&a.Key, &a.Display, &a.Role, &a.ContactUID, &a.Prompt,
 			&a.ToolsJSON, &te, &a.ThinkingEffort, &en, &joined, &actor,
-			&a.ReplyMode, &a.Talkativeness); err != nil {
+			&a.ReplyMode, &a.Talkativeness, &fishTalk); err != nil {
 			return nil, err
 		}
 		a.ThinkingEnabled = te != 0
 		a.Enabled = en != 0
 		a.Joined = joined != 0
 		a.ActorEnabled = actor != 0
+		a.FishingTalkEnabled = fishTalk != 0
 		out = append(out, a)
 	}
 	return out, rows.Err()

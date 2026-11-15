@@ -27,9 +27,16 @@ func TestMemoryLine(t *testing.T) {
 	}
 	r := &Runner{db: d}
 	line := r.memoryLine(ctx, "fishguide")
-	for _, want := range []string{"蓝冠", "4.80kg", "狗鱼", "星", "1.20kg", "鲈鱼"} {
+	// 常驻记忆只记「什么鱼 + 什么档次」，不列精确重量：人记得住上过一条蓝冠狗鱼，
+	// 记不住 4.80kg。精确数字归玩家真问时的 catchLine。
+	for _, want := range []string{"蓝冠的狗鱼", "上星的鲈鱼"} {
 		if !strings.Contains(line, want) {
 			t.Fatalf("记忆缺 %q: %s", want, line)
+		}
+	}
+	for _, unwanted := range []string{"4.80kg", "1.20kg", "kg"} {
+		if strings.Contains(line, unwanted) {
+			t.Fatalf("常驻记忆不该出现精确数字 %q: %s", unwanted, line)
 		}
 	}
 	if len([]rune(line)) > 150 {

@@ -40,9 +40,15 @@ func TestCatchBriefLine(t *testing.T) {
 	}
 
 	line := r.catchBriefLine(ctx, "hutao")
-	for _, want := range []string{"累计 2 条", "5.10kg", "茴鱼", "别再说自己空军"} {
+	// 常驻简报只给定性事实，不报条数/重量：陪聊不是报账。
+	for _, want := range []string{"确实上过鱼", "不是空军", "别再说自己一条没上"} {
 		if !strings.Contains(line, want) {
 			t.Fatalf("简报缺 %q: %s", want, line)
+		}
+	}
+	for _, unwanted := range []string{"累计", "kg", "2 条", "5.10"} {
+		if strings.Contains(line, unwanted) {
+			t.Fatalf("简报不该出现精确数字 %q: %s", unwanted, line)
 		}
 	}
 	if len([]rune(line)) > 70 {

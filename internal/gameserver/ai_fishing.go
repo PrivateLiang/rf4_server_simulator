@@ -83,21 +83,23 @@ func (s *Server) aiFishingTick(db *store.DB) {
 		return
 	}
 
+	// 只遍历在线会话所在的频道，顺手记下一个 uid 供播报任务归属。
+	// 空频道根本不会进这个 map —— 这就是「只在有玩家的频道推送」。
 	s.mu.Lock()
-	channels := map[string]bool{}
+	channelPlayers := map[string]int64{}
 	for _, sess := range s.sessions {
-		if sess != nil && !sess.Closed() {
-			channels[sessChannel(sess).Name] = true
+		if sess != nil && !sess.Closed() && sess.Userid > 0 {
+			channelPlayers[sessChannel(sess).Name] = sess.Userid
 		}
 	}
 	s.mu.Unlock()
 
-	for channel := range channels {
-		s.aiFishingForChannel(ctx, db, channel)
+	for channel, uid := range channelPlayers {
+		s.aiFishingForChannel(ctx, db, channel, uid)
 	}
 }
 
-func (s *Server) aiFishingForChannel(ctx context.Context, db *store.DB, channel string) {
+func (s *Server) aiFishingForChannel(ctx context.Context, db *store.DB, channel string, uid int64) {
 	if db.AISetting(ctx, "ai_actor_enabled", "1") != "1" {
 		return
 	}
@@ -153,6 +155,13 @@ func (s *Server) aiFishingForChannel(ctx context.Context, db *store.DB, channel 
 		return
 	}
 
+	// 配额计「说出口的话」，不是抽鱼次数。
+	// 静默档（ok）与概率未命中都不占配额、不推进节拍，这样
+	// hourly_limit 就是准确的发言频率，不会被大量静默抽鱼稀释。
+	talkOn := db.AISetting(ctx, "ai_fishing_talk_enabled", "0") == "1"
+	willTalk := talkOn && agent.FishingTalkEnabled &&
+		s.aiFishingTalkChance(ctx, ev) > 0
+
 	v, _ := aiFishingStates.LoadOrStore(channel, &aiFishingChannelState{interval: base})
 	st := v.(*aiFishingChannelState)
 	hourLimit := s.aiIntSetting(ctx, "ai_fishing_hourly_limit", 12, 1, 24)
@@ -161,6 +170,14 @@ func (s *Server) aiFishingForChannel(ctx context.Context, db *store.DB, channel 
 		st.hourStart = now
 		st.fishCount = 0
 		st.interval = base // 新的一小时从基础节拍重新开始
+	}
+	// 播报关闭时沿用旧行为：每次抽鱼都计一次配额，保持静默上鱼节奏不变。
+	// 播报开启时只有真正要说的话才检查/占用配额。
+	if talkOn && !willTalk {
+		st.mu.Unlock()
+		// 仍要写库，让「你钓了多少」查得到；只是不发消息、不占配额。
+		s.writeAICatch(ctx, db, agent, fish, loc)
+		return
 	}
 	if st.fishCount >= hourLimit || (!st.lastAt.IsZero() && now.Sub(st.lastAt) < st.interval) {
 		st.mu.Unlock()
@@ -173,7 +190,23 @@ func (s *Server) aiFishingForChannel(ctx context.Context, db *store.DB, channel 
 		st.interval = maxI
 	}
 	st.mu.Unlock()
-	// 只入库，不发频道消息。玩家问起时由 aibridge 查库回答。
+
+	// 写渔获 + 推进角色状态 + 星蓝战绩，抽鱼本身与「说不说」无关。
+	if !s.writeAICatch(ctx, db, agent, fish, loc) {
+		return
+	}
+	if talkOn {
+		// 只在抽中它的这个 channel 发一条；aiFishingForChannel 本来就只遍历
+		// 在线会话所在的频道，所以空频道不会被推送。
+		s.maybeAIFishingTalk(ctx, db, channel, uid, agent, fish, rng)
+	}
+}
+
+// writeAICatch 把一次虚拟上鱼写入 ai_catch，并同步角色状态与星蓝战绩。
+// 抽鱼与播报解耦：无论这次说不说，渔获都要入库，玩家问「你钓了多少」才查得到。
+func (s *Server) writeAICatch(ctx context.Context, db *store.DB, agent store.AIAgent,
+	fish aiFishTemplate, loc string) bool {
+
 	if err := db.AIAddCatch(ctx, store.AICatch{
 		AgentKey: agent.Key,
 		FishKey:  fish.FishKey,
@@ -185,11 +218,9 @@ func (s *Server) aiFishingForChannel(ctx context.Context, db *store.DB, channel 
 		Bait:     fish.Bait,
 	}); err != nil {
 		s.log.Warn("AI 渔获写入失败", "agent", agent.Key, "err", err)
-		return
+		return false
 	}
-	// 角色状态跟着上鱼走：对齐地图，钓到目标就换下一条。
 	s.actorNoteCatch(ctx, agent.Key, loc, fish.FishKey, fish.Name)
-	// 只有星/蓝写结构化战绩记忆：供聊天时自然提起，不等同于播报。
 	if fish.Event.rare() {
 		kind := "star"
 		if fish.Event == evSuper {
@@ -201,6 +232,7 @@ func (s *Server) aiFishingForChannel(ctx context.Context, db *store.DB, channel 
 			_ = db.AIPruneMemories(ctx, agent.Key, s.aiIntSetting(ctx, "ai_memory_max_rows", 50, 5, 200))
 		}
 	}
+	return true
 }
 
 func (s *Server) aiAgentsForChannel(ctx context.Context, channel string) []store.AIAgent {

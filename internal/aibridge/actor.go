@@ -66,6 +66,10 @@ func (r *Runner) actorLine(ctx context.Context, agentKey, fallbackLoc string) (l
 }
 
 // actorSentence 按当前活动写一句人话。休息时不能再说「正钓着」。
+//
+// 这里刻意不给精确分钟数：没人会记得自己蹲了 27 分钟，报数反而出戏。
+// 只给一个定性的时间感（刚到 / 一阵子 / 挺久），让模型自己凭感觉说。
+// 顺带也让状态句不再每分钟变化，前缀缓存能稳定命中。
 func (r *Runner) actorSentence(a *store.AIActor) string {
 	if a == nil {
 		return ""
@@ -77,18 +81,10 @@ func (r *Runner) actorSentence(a *store.AIActor) string {
 	if loc == "" {
 		return ""
 	}
-	mins := 0
-	if a.SinceTS > 0 {
-		mins = int(time.Since(time.Unix(int64(a.SinceTS), 0)).Minutes())
-	}
 	var text string
 	switch a.Activity {
 	case "resting":
-		text = "你在" + loc + "歇着，暂时没抛竿"
-		if mins >= 1 {
-			text += "，已经歇了" + strconv.Itoa(mins) + "分钟"
-		}
-		text += "。"
+		text = "你在" + loc + "歇着，暂时没抛竿。"
 	case "moving":
 		text = "你正在去" + loc + "的路上。"
 	case "idle":
@@ -98,13 +94,25 @@ func (r *Runner) actorSentence(a *store.AIActor) string {
 		if a.TargetName != "" {
 			text += "，正钓着" + a.TargetName
 		}
-		if mins >= 1 {
-			text += "，已经蹲了" + strconv.Itoa(mins) + "分钟"
-		}
 		text += "。"
 	}
+	if a.SinceTS > 0 {
+		text += durationFeel(time.Since(time.Unix(int64(a.SinceTS), 0)))
+	}
 	return "你现在的位置和状态：" + text +
-		"（这是你此刻真实在干的事，别把地点说岔；玩家问起就照实说。）"
+		"（这是你此刻真实在干的事，别把地点说岔；说多久凭感觉就行，别报精确时间。）"
+}
+
+// durationFeel 把时长压成一句人话，只分三档，跨档才变。
+func durationFeel(d time.Duration) string {
+	switch {
+	case d < 5*time.Minute:
+		return "刚到没多久。"
+	case d < 30*time.Minute:
+		return "待了一阵子了。"
+	default:
+		return "在这儿磨了挺久了。"
+	}
 }
 
 // actorLocName 把 level key 换成中文水域名；查不到就原样返回。
