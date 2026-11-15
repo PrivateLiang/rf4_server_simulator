@@ -48,17 +48,25 @@ type AIModule struct {
 	Hint  string `json:"hint"`
 }
 
-// AIModules 的顺序就是界面卡片顺序。分组依据是「谁在读这个值」，不是字面像不像。
+// AIModules 的顺序就是界面卡片顺序。
+//
+// 分组依据：先按「是不是基础能力」分两大层，再按功能划分。
+//   - 核心层：连接、角色、说话与上下文（上下文 / 圆桌 / 玩家上星反应 / 记忆）
+//     不管频道还是私聊都要用到，缺了 AI 就不会说话。
+//   - 拓展层：AI 虚拟钓鱼（上鱼 / 播报 / 角色状态），关掉不影响基础聊天。
+//
+// 每个模块是一张卡片，也是后端一组独立参数；新增功能加一个 module 即可，
+// 不用重排其它卡片。
 var AIModules = []AIModule{
 	{"conn", "连接与总开关", "出网是总闸；紧急停止优先于一切"},
 	{"agents", "角色与订阅", "Agent 管理与范围订阅，不走 ai_setting"},
+	{"budget", "上下文与回复上限", "频道、私聊、圆桌各自一份预算；最基础的一层"},
 	{"talk", "圆桌", "被叫到的人先答，其余按活跃度决定接不接"},
-	{"actor", "角色状态", "角色在钓鱼/休息/闲逛之间自己切换"},
-	{"fishing", "虚拟上鱼", "抽什么鱼、多久抽一次；只写入渔获库"},
-	{"fishing_talk", "上鱼播报", "AI 自己上鱼后主动开口；默认关"},
 	{"player_react", "玩家上星反应", "玩家上星/上蓝时，频道里的 AI 接一句"},
-	{"budget", "上下文与回复上限", "私聊放长、频道中等、圆桌最短"},
-	{"memory", "记忆", "星蓝战绩独立于对话历史，聊多久都不会忘"},
+	{"memory", "记忆", "通用记忆能力，独立于对话历史；后续可扩展到玩家偏好、跨会话事实"},
+	{"fishing", "虚拟上鱼", "拓展功能：抽什么鱼、多久抽一次"},
+	{"fishing_talk", "上鱼播报", "拓展功能：AI 自己上鱼后主动开口；默认关"},
+	{"actor", "角色状态", "拓展功能：角色在钓鱼/休息/闲逛之间自己切换"},
 }
 
 // AISettingSpecs 覆盖全部 ai_setting key。Min/Max 从旧 handleAISettingsSave
@@ -112,6 +120,7 @@ var AISettingSpecs = []SettingSpec{
 	{"ai_fishing_talk_near_chance", "fishing_talk", "下饭鱼发言概率", "0–1", KindFloat, "0.35", 0, 1, false},
 	{"ai_fishing_talk_miss_chance", "fishing_talk", "未达标发言概率", "0–1", KindFloat, "0.25", 0, 1, false},
 	{"ai_fishing_roundtable_chance", "fishing_talk", "上蓝升级圆桌概率", "0–1，复用圆桌冷却与每小时上限", KindFloat, "0.5", 0, 1, false},
+	{"ai_catch_brief_inject", "fishing_talk", "知道自己上过鱼", "虚拟上鱼只写库不发消息；打开后每轮补一句「你确实上过鱼」，避免角色说自己空军", KindBool, "1", 0, 0, false},
 
 	// ---- player_react：玩家自己上星/上蓝时 AI 接话 ----
 	{"ai_catch_talk", "player_react", "玩家上星时 AI 接话", "关闭后玩家上星不再惊动 AI", KindBool, "1", 0, 0, false},
@@ -137,8 +146,7 @@ var AISettingSpecs = []SettingSpec{
 	{"ai_profile_roundtable_reply_soft_chars", "budget", "圆桌回复软目标", "10–120", KindInt, "20", 10, 120, true},
 
 	// ---- memory：记忆 ----
-	{"ai_memory_inject", "memory", "注入战绩", "让 Agent 记得自己钓到过的星/蓝", KindBool, "1", 0, 0, false},
-	{"ai_catch_brief_inject", "memory", "知道自己上过鱼", "虚拟上鱼只写库不发消息；打开后每轮补一句「你确实钓到过鱼」，避免角色说自己空军", KindBool, "1", 0, 0, false},
+	{"ai_memory_inject", "memory", "注入记忆", "把结构化记忆注入上下文；当前数据源是星/蓝战绩", KindBool, "1", 0, 0, false},
 	{"ai_memory_recent", "memory", "最近几条", "0–5", KindInt, "3", 0, 5, true},
 	{"ai_memory_best", "memory", "最佳几条", "0–5", KindInt, "2", 0, 5, true},
 	{"ai_memory_max_rows", "memory", "最多保留", "5–200 条", KindInt, "50", 5, 200, true},

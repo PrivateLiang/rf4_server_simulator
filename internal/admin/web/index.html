@@ -148,7 +148,7 @@ body.notice-on #view-fish.on{height:max(600px,calc(100vh - 204px))}
 .ai-subhead small{color:var(--muted);font-size:11.5px}
 .ai-subhead:first-of-type{border-top:0;padding-top:0}
 .toggle-row small code{padding:0 4px;border-radius:4px;background:#09131f;border:1px solid #1f3449;color:#9be8cf;font-family:Consolas,monospace}
-.agent-list{display:flex;flex-direction:column;gap:12px;margin-top:14px}
+.agent-list{display:flex;flex-direction:column;gap:12px;margin-top:14px;max-height:620px;overflow-y:auto;padding-right:6px;scrollbar-width:thin}
 .agent-item{border:1px solid var(--line);border-radius:14px;background:#0c1826;padding:14px 16px;transition:border-color .15s}
 .agent-item:hover{border-color:#2d4d69}
 .agent-head{display:flex;justify-content:space-between;gap:14px;flex-wrap:wrap;align-items:flex-start}
@@ -268,10 +268,9 @@ body.notice-on #view-fish.on{height:max(600px,calc(100vh - 204px))}
       </div>
       <div class="params-tabs ai-tabs" id="aiTabs">
         <button class="params-tab on" data-ai-tab="conn" onclick="aiTab('conn')">连接<small>厂商 · 密钥 · 出网总闸</small></button>
-        <button class="params-tab" data-ai-tab="agents" onclick="aiTab('agents')">角色与订阅<small>新建 · 接入 · 范围</small></button>
-        <button class="params-tab" data-ai-tab="talk" onclick="aiTab('talk')">说话<small>圆桌 · 上星反应 · 上鱼播报</small></button>
-        <button class="params-tab" data-ai-tab="fishing" onclick="aiTab('fishing')">虚拟钓鱼<small>上鱼 · 角色状态</small></button>
-        <button class="params-tab" data-ai-tab="limits" onclick="aiTab('limits')">上下文与记忆<small>预算 · 上限 · 记忆</small></button>
+        <button class="params-tab" data-ai-tab="agents" onclick="aiTab('agents')">角色与订阅<small>范围 · 新建 · 接入</small></button>
+        <button class="params-tab" data-ai-tab="talk" onclick="aiTab('talk')">说话与上下文<small>基础能力 · 上下文 · 圆桌 · 反应 · 记忆</small></button>
+        <button class="params-tab" data-ai-tab="fishing" onclick="aiTab('fishing')">AI 虚拟钓鱼<small>拓展功能 · 上鱼 · 播报 · 状态</small></button>
       </div>
 
       <div class="ai-pane on" id="aiPane-conn">
@@ -287,6 +286,25 @@ body.notice-on #view-fish.on{height:max(600px,calc(100vh - 204px))}
       <div id="aiSettings-conn"></div>
       </div>
       <div class="ai-pane" id="aiPane-agents">
+      <div class="card"><div class="section-head"><div><h2>范围订阅</h2><small>官服一张图有十几个到上百个区域频道，按范围订阅一次管整张图</small></div></div>
+        <div class="channel-grid">
+          <div class="field"><label>范围（地图整张生效 / 全局任何频道）</label><select id="aiMapName" onchange="loadAIMaps()"></select></div>
+          <div class="field"><label>要操作的 Agent</label><select id="aiMapAgent"></select></div>
+          <div class="field"><label>&nbsp;</label><div class="actions" style="margin:0"><button class="btn sm" onclick="aiSubscribeMap(true)">拉进范围</button><button class="btn alt sm" onclick="aiSubscribeMap(false)">移出范围</button></div></div>
+        </div>
+        <div id="aiMapList" class="channel-list">读取中…</div>
+        <div class="muted" style="margin-top:8px">选「全局」= 该助手在任何频道都能接话；选地图 = 该图所有区域频道都能发言。玩家在图内换区域不会再失聪。</div>
+        <details style="margin-top:12px"><summary style="cursor:pointer">精确频道订阅（高级：只对某一个区域频道生效）</summary>
+          <div class="channel-grid" style="margin-top:10px">
+            <div class="field"><label>频道</label><select id="aiChannelName" onchange="loadAIChannels()"></select></div>
+            <div class="field"><label>要操作的 Agent</label><select id="aiChannelAgent"></select></div>
+            <div class="field"><label>&nbsp;</label><div class="actions" style="margin:0"><button class="btn sm" onclick="aiSubscribe(true)">拉进频道</button><button class="btn alt sm" onclick="aiSubscribe(false)">移出频道</button></div></div>
+          </div>
+          <div id="aiChannelList" class="channel-list">读取中…</div>
+          <div class="muted" style="margin-top:8px">游戏里也可以直接说「@邀请 Agent」「@移出 Agent」。</div>
+        </details>
+      </div>
+
       <div class="card ai-create-card"><div class="section-head"><div><h2>新增 Agent</h2><small>单独建一个角色；用回已删除的 Key 会恢复原联系人与历史</small></div></div>
         <div class="form-grid cols3">
           <div class="field"><label>Key（小写英文 / 数字 / - / _）</label><input id="aiNewKey" placeholder="fishguide"></div>
@@ -308,27 +326,10 @@ body.notice-on #view-fish.on{height:max(600px,calc(100vh - 204px))}
       </div>
 
       <div class="card"><div class="section-head"><div><h2>Agent 列表</h2><small>卡片即状态：说话方式、活跃度、角色模拟都能直接改</small></div><button class="btn alt sm" onclick="reloadAgents()">刷新</button></div>
+        <div class="toolbar" style="margin-top:10px"><input class="grow" id="aiAgentSearch" placeholder="按名称 / Key / 角色 / UID 筛选" oninput="renderAgentList(window.AI_AGENTS||[])"><span class="muted" id="aiAgentCount" style="white-space:nowrap"></span></div>
         <div id="aiAgentList" class="agent-list"><div class="empty">读取中…</div></div>
       </div>
 
-      <div class="card"><div class="section-head"><div><h2>范围订阅</h2><small>官服一张图有十几个到上百个区域频道，按范围订阅一次管整张图</small></div></div>
-        <div class="channel-grid">
-          <div class="field"><label>范围（地图整张生效 / 全局任何频道）</label><select id="aiMapName" onchange="loadAIMaps()"></select></div>
-          <div class="field"><label>要操作的 Agent</label><select id="aiMapAgent"></select></div>
-          <div class="field"><label>&nbsp;</label><div class="actions" style="margin:0"><button class="btn sm" onclick="aiSubscribeMap(true)">拉进范围</button><button class="btn alt sm" onclick="aiSubscribeMap(false)">移出范围</button></div></div>
-        </div>
-        <div id="aiMapList" class="channel-list">读取中…</div>
-        <div class="muted" style="margin-top:8px">选「全局」= 该助手在任何频道都能接话；选地图 = 该图所有区域频道都能发言。玩家在图内换区域不会再失聪。</div>
-        <details style="margin-top:12px"><summary style="cursor:pointer">精确频道订阅（高级：只对某一个区域频道生效）</summary>
-          <div class="channel-grid" style="margin-top:10px">
-            <div class="field"><label>频道</label><select id="aiChannelName" onchange="loadAIChannels()"></select></div>
-            <div class="field"><label>要操作的 Agent</label><select id="aiChannelAgent"></select></div>
-            <div class="field"><label>&nbsp;</label><div class="actions" style="margin:0"><button class="btn sm" onclick="aiSubscribe(true)">拉进频道</button><button class="btn alt sm" onclick="aiSubscribe(false)">移出频道</button></div></div>
-          </div>
-          <div id="aiChannelList" class="channel-list">读取中…</div>
-          <div class="muted" style="margin-top:8px">游戏里也可以直接说「@邀请 Agent」「@移出 Agent」。</div>
-        </details>
-      </div>
       </div>
 
       <div class="ai-pane" id="aiPane-talk">
@@ -336,9 +337,6 @@ body.notice-on #view-fish.on{height:max(600px,calc(100vh - 204px))}
       </div>
       <div class="ai-pane" id="aiPane-fishing">
       <div id="aiSettings-fishing"></div>
-      </div>
-      <div class="ai-pane" id="aiPane-limits">
-      <div id="aiSettings-limits"></div>
       </div>
     </section>
     <script>
@@ -348,7 +346,7 @@ body.notice-on #view-fish.on{height:max(600px,calc(100vh - 204px))}
       const v=document.getElementById('view-ai');if(v)v.classList.add('on');
       const b=document.querySelector('.nav button[data-view="ai"]');if(b)b.classList.add('on');
       const t=document.getElementById('pageTitle');if(t)t.textContent='AI 助手';
-      const s=document.getElementById('pageSub');if(s)s.textContent='连接 · 角色与订阅 · 说话 · 虚拟钓鱼 · 上下文与记忆';
+      const s=document.getElementById('pageSub');if(s)s.textContent='连接 · 角色与订阅 · 说话与上下文 · AI 虚拟钓鱼';
       loadAI();
     }
     function aiTab(name){
@@ -419,9 +417,16 @@ body.notice-on #view-fish.on{height:max(600px,calc(100vh - 204px))}
     function renderAgentList(agents){
       const box=document.getElementById('aiAgentList');
       if(!box)return;
+      window.AI_AGENTS=agents||[];
       if(!agents.length){box.innerHTML='<div class="empty">还没有 Agent。先在上面填角色与系统提示词再新增。</div>';return}
+      // 按展示名 / Key / 角色 / UID 模糊筛选，不区分大小写。
+      const q=(document.getElementById('aiAgentSearch')?.value||'').trim().toLowerCase();
+      const shown=q?agents.filter(a=>[a.display,a.key,a.role,String(a.contact_uid||'')].some(v=>String(v||'').toLowerCase().includes(q))):agents;
+      const cnt=document.getElementById('aiAgentCount');
+      if(cnt)cnt.textContent=q?('匹配 '+shown.length+' / '+agents.length):('共 '+agents.length+' 个');
+      if(!shown.length){box.innerHTML='<div class="empty">没有匹配的 Agent，换个关键词试试。</div>';return}
       const levels=['off','low','medium','high','max'];
-      box.innerHTML=agents.map(a=>{
+      box.innerHTML=shown.map(a=>{
         const opts=levels.map(l=>`<option value="${l}" ${a.thinking_effort===l?'selected':''}>${l}</option>`).join('');
         const talk=Number(a.talkativeness??50);
         const mode=AI_REPLY_MODES[a.reply_mode]?a.reply_mode:'social';
@@ -491,11 +496,12 @@ body.notice-on #view-fish.on{height:max(600px,calc(100vh - 204px))}
     }
     // 设置界面完全由后端注册表驱动：新增参数只改 ai_settings.go 一行，
     // 前端不用动。tab 是大类导航，卡片按「模块」分，高级参数默认折叠。
+    // 四个 tab：先基础后拓展。说话与上下文里「上下文」必须在最顶 ——
+    // 不管频道还是私聊都要先有预算，才谈得上圆桌、反应、记忆。
     const AI_TAB_MODULES={
       conn:['conn'],
-      talk:['talk','player_react','fishing_talk'],
-      fishing:['fishing','actor'],
-      limits:['budget','memory']
+      talk:['budget','talk','player_react','memory'],
+      fishing:['fishing','fishing_talk','actor']
     };
     function renderAISettings(d){
       const specs=d.specs||[], modules=d.modules||[], values=d.settings||{};
