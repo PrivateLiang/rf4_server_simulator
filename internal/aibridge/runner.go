@@ -288,10 +288,15 @@ func (r *Runner) handle(ctx context.Context, t *store.AITask) {
 	if mem := r.memoryLine(ctx, agent.Key); mem != "" {
 		system += "\n\n你的近期战绩（你确实钓到过，可以自然提起，但别反复吹）：" + mem
 	}
-	// 玩家主动问渔获时才查 ai_catch；平时不把数字塞进上下文。
-	if agent.ActorEnabled && catchQuestion(t.Text) {
-		if line := r.catchLine(ctx, agent.Key); line != "" {
+	// 玩家主动问渔获时才查全量；平时只给一句常驻简报，压住「空军」这种自相矛盾。
+	if agent.ActorEnabled {
+		if line := r.catchBriefLine(ctx, agent.Key); line != "" {
 			system += "\n\n" + line
+		}
+		if catchQuestion(t.Text) {
+			if line := r.catchLine(ctx, agent.Key); line != "" {
+				system += "\n\n" + line
+			}
 		}
 	}
 	system += "\n\n资料没有的内容明确说不知道，不要编造坐标、价格或概率。像玩家聊天一样简短，尽量不超过 " +
@@ -477,10 +482,37 @@ func (r *Runner) memoryLine(ctx context.Context, agentKey string) string {
 
 // catchQuestion 判断玩家是不是在问 AI 自己的渔获。
 // 只有这类问题才查 ai_catch，避免每句话都把战绩塞进上下文。
+// catchBriefLine 把 Agent 自己的渔获压成一句常驻事实，避免角色
+// 「明明上了鱼却说自己一条没影」。
+//
+// 虚拟上鱼只写 ai_catch 表、不发频道消息（见 gameserver/ai_fishing.go），
+// 所以模型平时完全不知道自己上过鱼；框架注入的状态句又只有「蹲了 N 分钟」，
+// 模型很容易顺着把「蹲很久」演成「空军了」。这里补一句极短的事实把它压住。
+//
+// 只有真的有渔获才注入（0 条时不说话，避免又引导出「我没钓到」）。
+// 玩家明确问渔获时，catchLine 会再给一份完整的，两者不冲突。
+func (r *Runner) catchBriefLine(ctx context.Context, agentKey string) string {
+	if r.db.AISetting(ctx, "ai_catch_brief_inject", "1") != "1" {
+		return ""
+	}
+	st, err := r.db.AICatchStats(ctx, agentKey)
+	if err != nil || st.Total == 0 {
+		return ""
+	}
+	line := fmt.Sprintf("你确实钓到过鱼：累计 %d 条", st.Total)
+	if st.BestName != "" {
+		line += fmt.Sprintf("，最大 %.2fkg 的%s", float64(st.BestWeightG)/1000, st.BestName)
+	}
+	return trimRunes(line+"。别再说自己空军或一条没上。", 70)
+}
+
 func catchQuestion(msg string) bool {
 	for _, w := range []string{
 		"钓了多少", "钓了几", "多少条", "几条鱼", "渔获", "收获",
 		"战绩", "最近钓", "钓到过", "钓过什么", "最大的一条", "上过什么鱼",
+		// 自然语言里常见的问法，以前会漏（「你们钓了哪些鱼了」实测没命中）。
+		"钓了哪些", "钓了什么", "钓了啥", "上鱼了吗", "上鱼没", "有鱼吗",
+		"钓到没", "钓到鱼没", "钓上", "空军",
 	} {
 		if strings.Contains(msg, w) {
 			return true
@@ -774,10 +806,15 @@ func (r *Runner) handleRoundtable(ctx context.Context, t *store.AITask) {
 		if line := actorLines[a.Key]; line != "" {
 			system += "\n\n" + line
 		}
-		// 群聊里有人问「你们钓了多少」时，各自查自己的渔获。
-		if a.ActorEnabled && catchQuestion(t.Text) {
-			if line := r.catchLine(ctx, a.Key); line != "" {
-				system += "\n\n" + line
+		// 每个发言者都知道自己上过鱼；有人明确问渔获时再各自补一份完整记录。
+		if a.ActorEnabled {
+			if brief := r.catchBriefLine(ctx, a.Key); brief != "" {
+				system += "\n\n" + brief
+			}
+			if catchQuestion(t.Text) {
+				if line := r.catchLine(ctx, a.Key); line != "" {
+					system += "\n\n" + line
+				}
 			}
 		}
 		system += "\n\n这是多人频道，不是轮流发言。你在跟 " + otherNames(agents, a.Key) + " 一起聊天。" +

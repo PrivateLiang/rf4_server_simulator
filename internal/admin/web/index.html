@@ -450,6 +450,7 @@ body.notice-on #view-fish.on{height:max(600px,calc(100vh - 204px))}
       <div class="card"><div class="section-head"><div><h2>战绩记忆</h2><small>星/蓝战绩独立于对话历史，聊多久都不会忘</small></div><button class="btn sm" onclick="saveAIMemory()">保存记忆</button></div>
         <div class="toggle-list">
           <div class="toggle-row"><div><b>注入战绩</b><small>让 Agent 记得自己钓到过的星/蓝，聊起来更连贯</small></div><input type="checkbox" class="switch" id="aiMemoryInject"></div>
+          <div class="toggle-row"><div><b>知道自己上过鱼</b><small>虚拟上鱼只写库不发频道消息；打开后每轮补一句「你确实钓到过鱼」，避免角色明明上了鱼却说自己空军</small></div><input type="checkbox" class="switch" id="aiCatchBriefInject"></div>
         </div>
         <div class="form-grid cols3" style="margin-top:14px">
           <div class="field"><label>最近几条（0–5）</label><input id="aiMemoryRecent" type="number" min="0" max="5"></div>
@@ -544,6 +545,7 @@ body.notice-on #view-fish.on{height:max(600px,calc(100vh - 204px))}
         document.getElementById('aiRtReplySoft').value=st.ai_profile_roundtable_reply_soft_chars||'20';
         document.getElementById('aiProfileInternal').value=st.ai_profile_internal_chars||'800';
         document.getElementById('aiMemoryInject').checked=st.ai_memory_inject!=='0';
+        document.getElementById('aiCatchBriefInject').checked=st.ai_catch_brief_inject!=='0';
         document.getElementById('aiMemoryRecent').value=st.ai_memory_recent||'3';
         document.getElementById('aiMemoryBest').value=st.ai_memory_best||'2';
         document.getElementById('aiMemoryMaxRows').value=st.ai_memory_max_rows||'50';
@@ -749,6 +751,7 @@ body.notice-on #view-fish.on{height:max(600px,calc(100vh - 204px))}
     function saveAIMemory(){
       postAISettings({
         ai_memory_inject:aiBool('aiMemoryInject'),
+        ai_catch_brief_inject:aiBool('aiCatchBriefInject'),
         ai_memory_recent:aiNum('aiMemoryRecent',3),
         ai_memory_best:aiNum('aiMemoryBest',2),
         ai_memory_max_rows:aiNum('aiMemoryMaxRows',50)},'记忆设置已保存');

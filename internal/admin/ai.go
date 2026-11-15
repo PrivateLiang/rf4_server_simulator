@@ -87,7 +87,8 @@ func (s *Server) handleAIStatus(w http.ResponseWriter, r *http.Request) {
 		"ai_profile_channel_history_chars", "ai_profile_channel_reply_chars", "ai_profile_channel_reply_soft_chars",
 		"ai_profile_roundtable_context_tokens", "ai_profile_roundtable_context_messages",
 		"ai_profile_roundtable_reply_chars", "ai_profile_roundtable_reply_soft_chars",
-		"ai_memory_inject", "ai_memory_recent", "ai_memory_best", "ai_memory_max_rows"} {
+		"ai_memory_inject", "ai_memory_recent", "ai_memory_best", "ai_memory_max_rows",
+		"ai_catch_brief_inject"} {
 		settings[k] = s.db.AISetting(ctx, k, "")
 	}
 	var baseURL, modelID, providerName, masked string
@@ -299,6 +300,8 @@ func (s *Server) handleAISettingsSave(w http.ResponseWriter, r *http.Request) {
 		MemoryRecent  *int  `json:"ai_memory_recent"`
 		MemoryBest    *int  `json:"ai_memory_best"`
 		MemoryMaxRows *int  `json:"ai_memory_max_rows"`
+
+		CatchBriefInject *bool `json:"ai_catch_brief_inject"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		httpError(w, 400, "请求格式错误")
@@ -500,6 +503,9 @@ func (s *Server) handleAISettingsSave(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.MemoryInject != nil {
 		set("ai_memory_inject", boolStr(*req.MemoryInject))
+	}
+	if req.CatchBriefInject != nil {
+		set("ai_catch_brief_inject", boolStr(*req.CatchBriefInject))
 	}
 	if req.MemoryRecent != nil {
 		set("ai_memory_recent", strconv.Itoa(clamp(*req.MemoryRecent, 0, 5)))
