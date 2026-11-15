@@ -68,28 +68,8 @@ func (s *Server) handleAITools(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleAIStatus(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	settings := map[string]string{}
-	for _, k := range []string{"outbound_enabled", "web_search_enabled", "emergency_stop",
-		"search_endpoint", "max_tool_rounds", "roundtable_enabled", "roundtable_max_speakers",
-		"roundtable_max_turns", "roundtable_max_ms", "roundtable_cooldown_ms", "roundtable_hourly_limit",
-		"roundtable_on_speech_chance", "roundtable_chime_chance", "roundtable_gap_ms", "roundtable_max_streak",
-		"ai_actor_enabled", "ai_actor_switch_chance", "ai_actor_switch_cooldown_s",
-		"ai_actor_fishing_session_min_s", "ai_actor_fishing_session_max_s",
-		"ai_actor_rest_min_s", "ai_actor_rest_max_s", "ai_actor_rest_chance",
-		"ai_fishing_enabled", "ai_fishing_hourly_limit", "ai_fishing_base_interval_ms",
-		"ai_fishing_max_interval_ms", "ai_fishing_star_weight", "ai_fishing_super_weight",
-		"ai_fishing_miss_weight", "ai_fishing_near_weight",
-		"ai_fishing_miss_ratio", "ai_fishing_near_ratio",
-		"ai_catch_talk", "ai_catch_star_chance", "ai_catch_super_chance", "ai_catch_roundtable_chance",
-		"ai_profile_internal_chars",
-		"ai_profile_dm_context_tokens", "ai_profile_dm_history_messages",
-		"ai_profile_dm_history_chars", "ai_profile_dm_reply_chars", "ai_profile_dm_reply_soft_chars",
-		"ai_profile_channel_context_tokens", "ai_profile_channel_history_messages",
-		"ai_profile_channel_history_chars", "ai_profile_channel_reply_chars", "ai_profile_channel_reply_soft_chars",
-		"ai_profile_roundtable_context_tokens", "ai_profile_roundtable_context_messages",
-		"ai_profile_roundtable_reply_chars", "ai_profile_roundtable_reply_soft_chars",
-		"ai_memory_inject", "ai_memory_recent", "ai_memory_best", "ai_memory_max_rows",
-		"ai_catch_brief_inject"} {
-		settings[k] = s.db.AISetting(ctx, k, "")
+	for _, spec := range AISettingSpecs {
+		settings[spec.Key] = s.db.AISetting(ctx, spec.Key, spec.Def)
 	}
 	var baseURL, modelID, providerName, masked string
 	_ = s.db.SQL.QueryRowContext(ctx, `
@@ -101,20 +81,21 @@ func (s *Server) handleAIStatus(w http.ResponseWriter, r *http.Request) {
 		ORDER BY p.id LIMIT 1`).Scan(&masked)
 
 	type agentView struct {
-		Key             string         `json:"key"`
-		Display         string         `json:"display"`
-		Role            string         `json:"role"`
-		ContactUID      int64          `json:"contact_uid"`
-		ThinkingEnabled bool           `json:"thinking_enabled"`
-		ThinkingEffort  string         `json:"thinking_effort"`
-		Joined          bool           `json:"joined"`
-		ActorEnabled    bool           `json:"actor_enabled"`
-		ReplyMode       string         `json:"reply_mode"`
-		Talkativeness   int            `json:"talkativeness"`
-		Actor           map[string]any `json:"actor,omitempty"`
-		Tools           string         `json:"tools"`
-		ToolsList       []string       `json:"tools_list"`
-		Prompt          string         `json:"prompt"`
+		Key                string         `json:"key"`
+		Display            string         `json:"display"`
+		Role               string         `json:"role"`
+		ContactUID         int64          `json:"contact_uid"`
+		ThinkingEnabled    bool           `json:"thinking_enabled"`
+		ThinkingEffort     string         `json:"thinking_effort"`
+		Joined             bool           `json:"joined"`
+		ActorEnabled       bool           `json:"actor_enabled"`
+		ReplyMode          string         `json:"reply_mode"`
+		Talkativeness      int            `json:"talkativeness"`
+		FishingTalkEnabled bool           `json:"fishing_talk_enabled"`
+		Actor              map[string]any `json:"actor,omitempty"`
+		Tools              string         `json:"tools"`
+		ToolsList          []string       `json:"tools_list"`
+		Prompt             string         `json:"prompt"`
 	}
 	actorByKey := map[string]store.AIActor{}
 	if actors, err := s.db.AIListActors(ctx); err == nil {
@@ -132,7 +113,8 @@ func (s *Server) handleAIStatus(w http.ResponseWriter, r *http.Request) {
 				ThinkingEnabled: a.ThinkingEnabled, ThinkingEffort: a.ThinkingEffort,
 				Joined: a.Joined, ActorEnabled: a.ActorEnabled,
 				ReplyMode: a.ReplyMode, Talkativeness: a.Talkativeness,
-				Tools: a.ToolsJSON, ToolsList: tools, Prompt: a.Prompt,
+				FishingTalkEnabled: a.FishingTalkEnabled,
+				Tools:              a.ToolsJSON, ToolsList: tools, Prompt: a.Prompt,
 			}
 			if act, ok := actorByKey[a.Key]; ok {
 				v.Actor = map[string]any{
@@ -164,7 +146,8 @@ func (s *Server) handleAIStatus(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	writeJSON(w, map[string]any{
-		"settings": settings, "provider": providerName, "base_url": baseURL,
+		"settings": settings, "specs": AISettingSpecs, "modules": AIModules,
+		"provider": providerName, "base_url": baseURL,
 		"model_id": modelID, "api_key_masked": masked, "agents": agents,
 		"last_error": lastError, "bridge": s.aiBridgeHealth(), "queue": queue,
 	})
@@ -230,291 +213,28 @@ func (s *Server) handleAIConfigSave(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]any{"ok": true})
 }
 
+// handleAISettingsSave 按参数注册表通用写入。
+// 参数声明见 ai_settings.go：新增参数只改注册表一行，不用再动这里。
 func (s *Server) handleAISettingsSave(w http.ResponseWriter, r *http.Request) {
-	var req struct {
-		OutboundEnabled       *bool   `json:"outbound_enabled"`
-		WebSearchEnabled      *bool   `json:"web_search_enabled"`
-		EmergencyStop         *bool   `json:"emergency_stop"`
-		SearchEndpoint        *string `json:"search_endpoint"`
-		MaxToolRounds         *int    `json:"max_tool_rounds"`
-		RoundtableEnabled     *bool   `json:"roundtable_enabled"`
-		RoundtableMaxSpeakers *int    `json:"roundtable_max_speakers"`
-		RoundtableMaxTurns    *int    `json:"roundtable_max_turns"`
-		RoundtableMaxMS       *int    `json:"roundtable_max_ms"`
-		RoundtableCooldownMS  *int    `json:"roundtable_cooldown_ms"`
-		RoundtableHourlyLimit *int    `json:"roundtable_hourly_limit"`
-		// 玩家普通发言自发开圆桌的概率；0 表示只能靠点名触发。
-		RoundtableSpeechChance *float64 `json:"roundtable_on_speech_chance"`
-		// 圆桌的「有条件发言」：基础接话率、AI 之间的间隔、连续发言上限。
-		RoundtableChimeChance *float64 `json:"roundtable_chime_chance"`
-		RoundtableGapMS       *int     `json:"roundtable_gap_ms"`
-		RoundtableMaxStreak   *int     `json:"roundtable_max_streak"`
-
-		// 角色状态：全局开关、被动换图概率/冷却、钓鱼与休息的时长。
-		ActorEnabled        *bool    `json:"ai_actor_enabled"`
-		ActorSwitchChance   *float64 `json:"ai_actor_switch_chance"`
-		ActorSwitchCooldown *int     `json:"ai_actor_switch_cooldown_s"`
-		ActorFishingMin     *int     `json:"ai_actor_fishing_session_min_s"`
-		ActorFishingMax     *int     `json:"ai_actor_fishing_session_max_s"`
-		ActorRestMin        *int     `json:"ai_actor_rest_min_s"`
-		ActorRestMax        *int     `json:"ai_actor_rest_max_s"`
-		ActorRestChance     *float64 `json:"ai_actor_rest_chance"`
-
-		FishingEnabled      *bool    `json:"ai_fishing_enabled"`
-		FishingHourlyLimit  *int     `json:"ai_fishing_hourly_limit"`
-		FishingBaseInterval *int     `json:"ai_fishing_base_interval_ms"`
-		FishingMaxInterval  *int     `json:"ai_fishing_max_interval_ms"`
-		FishingStarWeight   *float64 `json:"ai_fishing_star_weight"`
-		FishingSuperWeight  *float64 `json:"ai_fishing_super_weight"`
-		FishingMissWeight   *float64 `json:"ai_fishing_miss_weight"`
-		FishingNearWeight   *float64 `json:"ai_fishing_near_weight"`
-		FishingMissRatio    *float64 `json:"ai_fishing_miss_ratio"`
-		FishingNearRatio    *float64 `json:"ai_fishing_near_ratio"`
-
-		// 玩家自己上星/上蓝时是否让 AI 接一句。
-		CatchTalk           *bool    `json:"ai_catch_talk"`
-		CatchStarChance     *float64 `json:"ai_catch_star_chance"`
-		CatchSuperChance    *float64 `json:"ai_catch_super_chance"`
-		CatchRoundtableRate *float64 `json:"ai_catch_roundtable_chance"`
-
-		ProfileInternalChars *int `json:"ai_profile_internal_chars"`
-
-		DMContextTokens   *int `json:"ai_profile_dm_context_tokens"`
-		DMHistoryMessages *int `json:"ai_profile_dm_history_messages"`
-		DMHistoryChars    *int `json:"ai_profile_dm_history_chars"`
-		DMReplyChars      *int `json:"ai_profile_dm_reply_chars"`
-		DMReplySoftChars  *int `json:"ai_profile_dm_reply_soft_chars"`
-
-		ChannelContextTokens   *int `json:"ai_profile_channel_context_tokens"`
-		ChannelHistoryMessages *int `json:"ai_profile_channel_history_messages"`
-		ChannelHistoryChars    *int `json:"ai_profile_channel_history_chars"`
-		ChannelReplyChars      *int `json:"ai_profile_channel_reply_chars"`
-		ChannelReplySoftChars  *int `json:"ai_profile_channel_reply_soft_chars"`
-
-		RtContextTokens   *int `json:"ai_profile_roundtable_context_tokens"`
-		RtContextMessages *int `json:"ai_profile_roundtable_context_messages"`
-		RtReplyChars      *int `json:"ai_profile_roundtable_reply_chars"`
-		RtReplySoftChars  *int `json:"ai_profile_roundtable_reply_soft_chars"`
-
-		MemoryInject  *bool `json:"ai_memory_inject"`
-		MemoryRecent  *int  `json:"ai_memory_recent"`
-		MemoryBest    *int  `json:"ai_memory_best"`
-		MemoryMaxRows *int  `json:"ai_memory_max_rows"`
-
-		CatchBriefInject *bool `json:"ai_catch_brief_inject"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	var body map[string]any
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		httpError(w, 400, "请求格式错误")
 		return
 	}
 	ctx := r.Context()
-	boolStr := func(b bool) string {
-		if b {
-			return "1"
+	updates := make(map[string]string, len(body))
+	for key, raw := range body {
+		spec, ok := settingByKey[key]
+		if !ok {
+			continue // 未知 key 静默忽略，避免把前端拼错的字段写进库
 		}
-		return "0"
-	}
-	updates := make(map[string]string, 64)
-	set := func(key, value string) { updates[key] = value }
-	if req.OutboundEnabled != nil {
-		set("outbound_enabled", boolStr(*req.OutboundEnabled))
-	}
-	if req.WebSearchEnabled != nil {
-		set("web_search_enabled", boolStr(*req.WebSearchEnabled))
-	}
-	if req.EmergencyStop != nil {
-		set("emergency_stop", boolStr(*req.EmergencyStop))
-	}
-	if req.SearchEndpoint != nil {
-		set("search_endpoint", *req.SearchEndpoint)
-	}
-	if req.MaxToolRounds != nil && *req.MaxToolRounds >= 1 && *req.MaxToolRounds <= 4 {
-		set("max_tool_rounds", strconv.Itoa(*req.MaxToolRounds))
-	}
-	if req.RoundtableEnabled != nil {
-		set("roundtable_enabled", boolStr(*req.RoundtableEnabled))
-	}
-	// 圆桌参数只能调小：代码与这里都夹硬上限，后台改不大。
-	clamp := func(v, lo, hi int) int {
-		if v < lo {
-			return lo
+		if v, valid := NormalizeSettingValue(spec, raw); valid {
+			updates[key] = v
 		}
-		if v > hi {
-			return hi
-		}
-		return v
 	}
-	if req.RoundtableMaxSpeakers != nil {
-		set("roundtable_max_speakers", strconv.Itoa(clamp(*req.RoundtableMaxSpeakers, 2, 3)))
-	}
-	if req.RoundtableMaxTurns != nil {
-		set("roundtable_max_turns", strconv.Itoa(clamp(*req.RoundtableMaxTurns, 2, 6)))
-	}
-	if req.RoundtableMaxMS != nil {
-		set("roundtable_max_ms", strconv.Itoa(clamp(*req.RoundtableMaxMS, 5000, 30000)))
-	}
-	if req.RoundtableCooldownMS != nil {
-		set("roundtable_cooldown_ms", strconv.Itoa(clamp(*req.RoundtableCooldownMS, 30000, 600000)))
-	}
-	if req.RoundtableHourlyLimit != nil {
-		set("roundtable_hourly_limit", strconv.Itoa(clamp(*req.RoundtableHourlyLimit, 1, 10)))
-	}
-	clampF := func(v, lo, hi float64) float64 {
-		if v < lo {
-			return lo
-		}
-		if v > hi {
-			return hi
-		}
-		return v
-	}
-	floatStr := func(v float64) string { return strconv.FormatFloat(v, 'f', -1, 64) }
-	if req.RoundtableSpeechChance != nil {
-		set("roundtable_on_speech_chance",
-			floatStr(clampF(*req.RoundtableSpeechChance, 0, 1)))
-	}
-	if req.RoundtableChimeChance != nil {
-		set("roundtable_chime_chance",
-			floatStr(clampF(*req.RoundtableChimeChance, 0, 1)))
-	}
-	if req.RoundtableGapMS != nil {
-		set("roundtable_gap_ms", strconv.Itoa(clamp(*req.RoundtableGapMS, 500, 10000)))
-	}
-	if req.RoundtableMaxStreak != nil {
-		set("roundtable_max_streak", strconv.Itoa(clamp(*req.RoundtableMaxStreak, 1, 6)))
-	}
-	if req.ActorEnabled != nil {
-		set("ai_actor_enabled", boolStr(*req.ActorEnabled))
-	}
-	if req.ActorSwitchChance != nil {
-		set("ai_actor_switch_chance",
-			floatStr(clampF(*req.ActorSwitchChance, 0, 1)))
-	}
-	if req.ActorSwitchCooldown != nil {
-		set("ai_actor_switch_cooldown_s",
-			strconv.Itoa(clamp(*req.ActorSwitchCooldown, 60, 21600)))
-	}
-	if req.ActorFishingMin != nil {
-		set("ai_actor_fishing_session_min_s",
-			strconv.Itoa(clamp(*req.ActorFishingMin, 300, 21600)))
-	}
-	if req.ActorFishingMax != nil {
-		set("ai_actor_fishing_session_max_s",
-			strconv.Itoa(clamp(*req.ActorFishingMax, 600, 43200)))
-	}
-	if req.ActorRestMin != nil {
-		set("ai_actor_rest_min_s",
-			strconv.Itoa(clamp(*req.ActorRestMin, 120, 14400)))
-	}
-	if req.ActorRestMax != nil {
-		set("ai_actor_rest_max_s",
-			strconv.Itoa(clamp(*req.ActorRestMax, 300, 28800)))
-	}
-	if req.ActorRestChance != nil {
-		set("ai_actor_rest_chance",
-			floatStr(clampF(*req.ActorRestChance, 0, 1)))
-	}
-	if req.FishingMissWeight != nil {
-		set("ai_fishing_miss_weight", floatStr(clampF(*req.FishingMissWeight, 0, 1)))
-	}
-	if req.FishingNearWeight != nil {
-		set("ai_fishing_near_weight", floatStr(clampF(*req.FishingNearWeight, 0, 1)))
-	}
-	if req.FishingMissRatio != nil {
-		set("ai_fishing_miss_ratio", floatStr(clampF(*req.FishingMissRatio, 0.05, 0.6)))
-	}
-	if req.FishingNearRatio != nil {
-		set("ai_fishing_near_ratio", floatStr(clampF(*req.FishingNearRatio, 0.6, 0.99)))
-	}
-	if req.FishingEnabled != nil {
-		set("ai_fishing_enabled", boolStr(*req.FishingEnabled))
-	}
-	if req.CatchTalk != nil {
-		set("ai_catch_talk", boolStr(*req.CatchTalk))
-	}
-	if req.CatchStarChance != nil {
-		set("ai_catch_star_chance", floatStr(clampF(*req.CatchStarChance, 0, 1)))
-	}
-	if req.CatchSuperChance != nil {
-		set("ai_catch_super_chance", floatStr(clampF(*req.CatchSuperChance, 0, 1)))
-	}
-	if req.CatchRoundtableRate != nil {
-		set("ai_catch_roundtable_chance", floatStr(clampF(*req.CatchRoundtableRate, 0, 1)))
-	}
-	if req.FishingHourlyLimit != nil {
-		set("ai_fishing_hourly_limit", strconv.Itoa(clamp(*req.FishingHourlyLimit, 1, 24)))
-	}
-	if req.FishingBaseInterval != nil {
-		set("ai_fishing_base_interval_ms", strconv.Itoa(clamp(*req.FishingBaseInterval, 60000, 1800000)))
-	}
-	if req.FishingMaxInterval != nil {
-		set("ai_fishing_max_interval_ms", strconv.Itoa(clamp(*req.FishingMaxInterval, 60000, 3600000)))
-	}
-	if req.FishingStarWeight != nil {
-		set("ai_fishing_star_weight", floatStr(clampF(*req.FishingStarWeight, 0, 1)))
-	}
-	if req.FishingSuperWeight != nil {
-		set("ai_fishing_super_weight", floatStr(clampF(*req.FishingSuperWeight, 0, 1)))
-	}
-	if req.ProfileInternalChars != nil {
-		set("ai_profile_internal_chars", strconv.Itoa(clamp(*req.ProfileInternalChars, 200, 4000)))
-	}
-	if req.DMContextTokens != nil {
-		set("ai_profile_dm_context_tokens", strconv.Itoa(clamp(*req.DMContextTokens, 1000, 30000)))
-	}
-	if req.DMHistoryMessages != nil {
-		set("ai_profile_dm_history_messages", strconv.Itoa(clamp(*req.DMHistoryMessages, 0, 300)))
-	}
-	if req.DMHistoryChars != nil {
-		set("ai_profile_dm_history_chars", strconv.Itoa(clamp(*req.DMHistoryChars, 0, 20000)))
-	}
-	if req.DMReplyChars != nil {
-		set("ai_profile_dm_reply_chars", strconv.Itoa(clamp(*req.DMReplyChars, 100, 2000)))
-	}
-	if req.DMReplySoftChars != nil {
-		set("ai_profile_dm_reply_soft_chars", strconv.Itoa(clamp(*req.DMReplySoftChars, 20, 800)))
-	}
-	if req.ChannelContextTokens != nil {
-		set("ai_profile_channel_context_tokens", strconv.Itoa(clamp(*req.ChannelContextTokens, 800, 30000)))
-	}
-	if req.ChannelHistoryMessages != nil {
-		set("ai_profile_channel_history_messages", strconv.Itoa(clamp(*req.ChannelHistoryMessages, 0, 300)))
-	}
-	if req.ChannelHistoryChars != nil {
-		set("ai_profile_channel_history_chars", strconv.Itoa(clamp(*req.ChannelHistoryChars, 200, 20000)))
-	}
-	if req.ChannelReplyChars != nil {
-		set("ai_profile_channel_reply_chars", strconv.Itoa(clamp(*req.ChannelReplyChars, 20, 500)))
-	}
-	if req.ChannelReplySoftChars != nil {
-		set("ai_profile_channel_reply_soft_chars", strconv.Itoa(clamp(*req.ChannelReplySoftChars, 10, 200)))
-	}
-	if req.RtContextTokens != nil {
-		set("ai_profile_roundtable_context_tokens", strconv.Itoa(clamp(*req.RtContextTokens, 800, 12000)))
-	}
-	if req.RtContextMessages != nil {
-		set("ai_profile_roundtable_context_messages", strconv.Itoa(clamp(*req.RtContextMessages, 1, 4)))
-	}
-	if req.RtReplyChars != nil {
-		set("ai_profile_roundtable_reply_chars", strconv.Itoa(clamp(*req.RtReplyChars, 30, 300)))
-	}
-	if req.RtReplySoftChars != nil {
-		set("ai_profile_roundtable_reply_soft_chars", strconv.Itoa(clamp(*req.RtReplySoftChars, 10, 120)))
-	}
-	if req.MemoryInject != nil {
-		set("ai_memory_inject", boolStr(*req.MemoryInject))
-	}
-	if req.CatchBriefInject != nil {
-		set("ai_catch_brief_inject", boolStr(*req.CatchBriefInject))
-	}
-	if req.MemoryRecent != nil {
-		set("ai_memory_recent", strconv.Itoa(clamp(*req.MemoryRecent, 0, 5)))
-	}
-	if req.MemoryBest != nil {
-		set("ai_memory_best", strconv.Itoa(clamp(*req.MemoryBest, 0, 5)))
-	}
-	if req.MemoryMaxRows != nil {
-		set("ai_memory_max_rows", strconv.Itoa(clamp(*req.MemoryMaxRows, 5, 200)))
+	if len(updates) == 0 {
+		writeJSON(w, map[string]any{"ok": true, "updated": 0})
+		return
 	}
 	if err := s.db.AISetSettings(ctx, updates); err != nil {
 		httpError(w, 500, "设置保存失败")
@@ -526,7 +246,7 @@ func (s *Server) handleAISettingsSave(w http.ResponseWriter, r *http.Request) {
 	}
 	sort.Strings(keys)
 	_ = s.db.AuditLogWrite(ctx, adminOf(r), "ai_settings", "global", "keys="+strings.Join(keys, ","))
-	writeJSON(w, map[string]any{"ok": true})
+	writeJSON(w, map[string]any{"ok": true, "updated": len(updates)})
 }
 
 func (s *Server) handleAIAgentSave(w http.ResponseWriter, r *http.Request) {
@@ -1017,6 +737,27 @@ func (s *Server) handleAIAgentBehavior(w http.ResponseWriter, r *http.Request) {
 	}
 	_ = s.db.AuditLogWrite(ctx, adminOf(r), "ai_agent_behavior", req.Key,
 		req.ReplyMode+" talkativeness="+strconv.Itoa(talk))
+	writeJSON(w, map[string]any{"ok": true})
+}
+
+// handleAIAgentFishingTalk 开关某个 Agent 的「上鱼报话」。
+// 全局范围决定在哪能见到它，这个决定它上了鱼能不能主动开口。
+func (s *Server) handleAIAgentFishingTalk(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Key     string `json:"key"`
+		Enabled bool   `json:"enabled"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Key == "" {
+		httpError(w, 400, "请求格式错误")
+		return
+	}
+	ctx := r.Context()
+	if err := s.db.AISetAgentFishingTalk(ctx, req.Key, req.Enabled); err != nil {
+		httpError(w, 500, "上鱼报话保存失败")
+		return
+	}
+	_ = s.db.AuditLogWrite(ctx, adminOf(r), "ai_agent_fishing_talk", req.Key,
+		"enabled="+strconv.FormatBool(req.Enabled))
 	writeJSON(w, map[string]any{"ok": true})
 }
 

@@ -267,15 +267,14 @@ body.notice-on #view-fish.on{height:max(600px,calc(100vh - 204px))}
         <div class="ai-stat"><span class="k">队列</span><b id="aiStatusQueue">—</b></div>
       </div>
       <div class="params-tabs ai-tabs" id="aiTabs">
-        <button class="params-tab on" data-ai-tab="conn" onclick="aiTab('conn')">连接与总开关<small>厂商 · 密钥 · 出网</small></button>
-        <button class="params-tab" data-ai-tab="agents" onclick="aiTab('agents')">Agent<small>角色 · 说话方式 · 状态</small></button>
-        <button class="params-tab" data-ai-tab="talk" onclick="aiTab('talk')">说话与圆桌<small>谁开口 · 冷场 · 节奏</small></button>
-        <button class="params-tab" data-ai-tab="fishing" onclick="aiTab('fishing')">虚拟钓鱼与角色<small>入库 · 状态 · 节奏</small></button>
-        <button class="params-tab" data-ai-tab="limits" onclick="aiTab('limits')">上下文与记忆<small>预算 · 回复上限 · 战绩</small></button>
+        <button class="params-tab on" data-ai-tab="conn" onclick="aiTab('conn')">连接<small>厂商 · 密钥 · 出网总闸</small></button>
+        <button class="params-tab" data-ai-tab="agents" onclick="aiTab('agents')">角色与订阅<small>新建 · 接入 · 范围</small></button>
+        <button class="params-tab" data-ai-tab="talk" onclick="aiTab('talk')">说话<small>圆桌 · 上星反应 · 上鱼播报</small></button>
+        <button class="params-tab" data-ai-tab="fishing" onclick="aiTab('fishing')">虚拟钓鱼<small>上鱼 · 角色状态</small></button>
+        <button class="params-tab" data-ai-tab="limits" onclick="aiTab('limits')">上下文与记忆<small>预算 · 上限 · 记忆</small></button>
       </div>
 
       <div class="ai-pane on" id="aiPane-conn">
-
       <div class="card"><div class="section-head"><div><h2>模型厂商与密钥</h2><small>统一兼容抽象层 · 不硬编码模型名</small></div></div>
         <div class="form-grid">
           <div class="field"><label>厂商地址 base_url</label><input id="aiBaseURL" placeholder="https://api.deepseek.com"></div>
@@ -283,22 +282,10 @@ body.notice-on #view-fish.on{height:max(600px,calc(100vh - 204px))}
           <div class="field span2"><label>API Key（只写不读，留空表示不修改）</label><input id="aiKey" type="password" placeholder="sk-..."></div>
         </div>
         <div class="actions"><span class="muted" id="aiKeyMasked"></span><button class="btn alt" onclick="testAI()">测试连接</button><button class="btn" onclick="saveAIConfig()">保存厂商与密钥</button><span class="muted" id="aiTestResult"></span></div>
-      </div>
-
-      <div class="card" style="margin-top:16px"><div class="section-head"><div><h2>总开关</h2><small>出网是总闸；紧急停止优先于一切</small></div><button class="btn sm" onclick="saveAIBasic()">保存总开关</button></div>
-        <div class="toggle-list">
-          <div class="toggle-row"><div><b>模型调用出网</b><small>关闭后所有 AI 只走本地降级文案，不产生费用</small></div><input type="checkbox" class="switch" id="aiOutbound"></div>
-          <div class="toggle-row"><div><b>联网搜索工具</b><small>默认关闭，只查内部资料；打开后需要填检索端点</small></div><input type="checkbox" class="switch" id="aiWebSearch"></div>
-          <div class="toggle-row"><div><b>紧急停止</b><small>切断所有模型调用，优先级最高</small></div><input type="checkbox" class="switch" id="aiEmergency"></div>
-        </div>
-        <div class="form-grid cols2" style="margin-top:14px">
-          <div class="field"><label>工具调用最大轮数（1–4）</label><input id="aiMaxToolRounds" type="number" min="1" max="4"></div>
-          <div class="field"><label>外部检索端点（联网搜索打开时生效；留空则仍只用内部资料）</label><input id="aiSearchEndpoint" placeholder="http://127.0.0.1:8080/search"></div>
-        </div>
         <div class="muted" id="aiLastError" style="margin-top:10px">最近没有失败记录</div>
       </div>
+      <div id="aiSettings-conn"></div>
       </div>
-
       <div class="ai-pane" id="aiPane-agents">
       <div class="card ai-create-card"><div class="section-head"><div><h2>新增 Agent</h2><small>单独建一个角色；用回已删除的 Key 会恢复原联系人与历史</small></div></div>
         <div class="form-grid cols3">
@@ -323,10 +310,8 @@ body.notice-on #view-fish.on{height:max(600px,calc(100vh - 204px))}
       <div class="card"><div class="section-head"><div><h2>Agent 列表</h2><small>卡片即状态：说话方式、活跃度、角色模拟都能直接改</small></div><button class="btn alt sm" onclick="reloadAgents()">刷新</button></div>
         <div id="aiAgentList" class="agent-list"><div class="empty">读取中…</div></div>
       </div>
-      </div>
 
-      <div class="ai-pane" id="aiPane-talk">
-      <div class="card"><div class="section-head"><div><h2>频道订阅</h2><small>官服一张图有十几个到上百个区域频道，地图级订阅一次管整张图</small></div></div>
+      <div class="card"><div class="section-head"><div><h2>范围订阅</h2><small>官服一张图有十几个到上百个区域频道，按范围订阅一次管整张图</small></div></div>
         <div class="channel-grid">
           <div class="field"><label>范围（地图整张生效 / 全局任何频道）</label><select id="aiMapName" onchange="loadAIMaps()"></select></div>
           <div class="field"><label>要操作的 Agent</label><select id="aiMapAgent"></select></div>
@@ -344,120 +329,16 @@ body.notice-on #view-fish.on{height:max(600px,calc(100vh - 204px))}
           <div class="muted" style="margin-top:8px">游戏里也可以直接说「@邀请 Agent」「@移出 Agent」。</div>
         </details>
       </div>
-
-      <div class="card"><div class="section-head"><div><h2>Agent 圆桌</h2><small>不是轮流点名：被叫到的人先答，其余人按活跃度决定接不接；没人想接就自然冷场</small></div><button class="btn sm" onclick="saveAIRoundtable()">保存圆桌</button></div>
-        <div class="toggle-list">
-          <div class="toggle-row"><div><b>允许互相对话</b><small>关闭时只做单人回复；打开后才会出现多人接话</small></div><input type="checkbox" class="switch" id="aiRoundtable"></div>
-        </div>
-        <div class="form-grid cols3" style="margin-top:14px">
-          <div class="field"><label>最多参与人数（2–3）</label><input id="aiRtSpeakers" type="number" min="2" max="3"></div>
-          <div class="field"><label>最多发言条数（2–6）</label><input id="aiRtTurns" type="number" min="2" max="6"></div>
-          <div class="field"><label>总时长上限 ms（5000–30000）</label><input id="aiRtMS" type="number" min="5000" max="30000" step="1000"></div>
-          <div class="field"><label>基础接话率（0–1）</label><input id="aiRtChime" type="number" min="0" max="1" step="0.05"></div>
-          <div class="field"><label>连续发言上限（1–6）</label><input id="aiRtStreak" type="number" min="1" max="6"></div>
-          <div class="field"><label>AI 发言间隔 ms（500–10000）</label><input id="aiRtGap" type="number" min="500" max="10000" step="100"></div>
-          <div class="field"><label>圆桌冷却 ms（30000–600000）</label><input id="aiRtCooldown" type="number" min="30000" max="600000" step="10000"></div>
-          <div class="field"><label>每小时次数（1–10）</label><input id="aiRtHourly" type="number" min="1" max="10"></div>
-          <div class="field"><label>玩家发言自发圆桌概率（0–1）</label><input id="aiRtSpeech" type="number" min="0" max="1" step="0.05"></div>
-        </div>
-        <div class="ai-note">
-          <b>发言权怎么定：</b>真人点名 → 被叫到的人先答；AI 话里点了谁 → 谁优先接；
-          其余人按「活跃度 × 冷却 × 已经说过几次」各自掷一次，不想接就回复 <code>[不语]</code>（内部标记，不会显示在游戏里）。
-          所有人都没接就结束；连续 AI 发言达到上限后，只有被点名才会继续说。
-        </div>
-      </div>
       </div>
 
+      <div class="ai-pane" id="aiPane-talk">
+      <div id="aiSettings-talk"></div>
+      </div>
       <div class="ai-pane" id="aiPane-fishing">
-      <div class="card"><div class="section-head"><div><h2>AI 虚拟钓鱼与角色状态</h2><small>角色会在钓鱼/休息/闲逛之间切换；虚拟钓鱼只写入渔获库，不发频道播报</small></div><button class="btn sm" onclick="saveAIFishingState()">保存钓鱼与状态</button></div>
-        <div class="toggle-list">
-          <div class="toggle-row"><div><b>启用角色活动状态</b><small>总开关，包含「钓鱼 / 休息 / 闲逛」。关闭后所有 Agent 不再有活动，也不会产生虚拟渔获</small></div><input type="checkbox" class="switch" id="aiActorEnabled" onchange="syncAIStateSwitches()"></div>
-          <div class="toggle-row"><div><b>启用 AI 虚拟钓鱼</b><small>只有处于「钓鱼」状态的 Agent 才按下方节奏生成渔获并写入 <code>ai_catch</code>；不发频道消息</small></div><input type="checkbox" class="switch" id="aiFishing"></div>
-          <div class="toggle-row"><div><b>玩家上星/上蓝反应</b><small>玩家自己上星/蓝时让 AI 接一句；与 AI 自己的虚拟渔获无关，独立开关</small></div><input type="checkbox" class="switch" id="aiCatchTalk"></div>
-        </div>
-
-        <div class="ai-subhead"><h3>虚拟钓鱼节奏</h3><small>影响 AI 自己入库的渔获</small></div>
-        <div class="form-grid cols3">
-          <div class="field"><label>每小时最多记录几条（1–24，频道共享）</label><input id="aiFishingHourly" type="number" min="1" max="24"></div>
-          <div class="field"><label>基础间隔 ms（60000–1800000）</label><input id="aiFishingBase" type="number" min="60000" max="1800000" step="10000"></div>
-          <div class="field"><label>最大间隔 ms（60000–3600000）</label><input id="aiFishingMax" type="number" min="60000" max="3600000" step="10000"></div>
-        </div>
-        <details class="ai-adv"><summary>出鱼档位与玩家反应概率（高级）</summary>
-          <div class="form-grid cols3">
-            <div class="field"><label>上蓝占比</label><input id="aiFishingSuper" type="number" min="0" max="1" step="0.001"></div>
-            <div class="field"><label>上星占比</label><input id="aiFishingStar" type="number" min="0" max="1" step="0.001"></div>
-            <div class="field"><label>下饭鱼占比</label><input id="aiFishingNear" type="number" min="0" max="1" step="0.01"></div>
-            <div class="field"><label>未达标占比</label><input id="aiFishingMiss" type="number" min="0" max="1" step="0.01"></div>
-            <div class="field"><label>下饭分界（占星线比例）</label><input id="aiFishingNearRatio" type="number" min="0.6" max="0.99" step="0.01"></div>
-            <div class="field"><label>未达标分界（占星线比例）</label><input id="aiFishingMissRatio" type="number" min="0.05" max="0.6" step="0.01"></div>
-            <div class="field"><label>上星反应概率（0–1）</label><input id="aiCatchStarChance" type="number" min="0" max="1" step="0.05"></div>
-            <div class="field"><label>上蓝反应概率（0–1）</label><input id="aiCatchSuperChance" type="number" min="0" max="1" step="0.05"></div>
-            <div class="field"><label>上蓝时开圆桌的概率（0–1）</label><input id="aiCatchRoundtable" type="number" min="0" max="1" step="0.05"></div>
-          </div>
-          <div class="muted">占比是每次渔获的构成比例；普通达标也会入库，只是不写星/蓝战绩记忆。</div>
-          <div class="muted">上星/上蓝反应概率是每次独立掷一次：0.6 = 60% 会接话，想每次都接就填 1。两次反应之间还有 30 秒频道冷却。</div>
-        </details>
-
-        <div class="ai-subhead"><h3>角色活动参数</h3><small>每个 Agent 还要在「Agent」页单独开启「角色模拟」</small></div>
-        <div class="form-grid cols3">
-          <div class="field"><label>钓鱼一段最短（秒）</label><input id="aiActorFishMin" type="number" min="300" max="21600" step="60"></div>
-          <div class="field"><label>钓鱼一段最长（秒）</label><input id="aiActorFishMax" type="number" min="600" max="43200" step="60"></div>
-          <div class="field"><label>钓完去休息的概率（0–1）</label><input id="aiActorRestChance" type="number" min="0" max="1" step="0.05"></div>
-          <div class="field"><label>休息一段最短（秒）</label><input id="aiActorRestMin" type="number" min="120" max="14400" step="60"></div>
-          <div class="field"><label>休息一段最长（秒）</label><input id="aiActorRestMax" type="number" min="300" max="28800" step="60"></div>
-          <div class="field"><label>听劝换目标概率（0–1）</label><input id="aiActorSwitchChance" type="number" min="0" max="1" step="0.05"></div>
-          <div class="field"><label>换目标冷却（秒）</label><input id="aiActorSwitchCooldown" type="number" min="60" max="21600" step="60"></div>
-        </div>
-
-        <div class="ai-note">
-          <b>开关关系：</b>「启用角色活动状态」是总闸，关闭后钓鱼/休息/闲逛与虚拟渔获都会停止。
-          「启用 AI 虚拟钓鱼」只决定是否产生渔获记录；「玩家上星/上蓝反应」只影响 AI 对玩家渔获的接话，两者互不依赖。
-          渔获只进 <code>ai_catch</code>，玩家问「你钓了多少 / 最近钓到什么」时才查库回答。
-        </div>
+      <div id="aiSettings-fishing"></div>
       </div>
-
-      </div>
-
       <div class="ai-pane" id="aiPane-limits">
-      <div class="card"><div class="section-head"><div><h2>上下文与回复上限</h2><small>私聊放长、频道中等、圆桌最短；回复是宽上限，不是无限</small></div><button class="btn sm" onclick="saveAIProfile()">保存上限</button></div>
-        <h3>私聊</h3>
-        <div class="form-grid">
-          <div class="field"><label>上下文 tokens（1000–30000）</label><input id="aiDmCtxTokens" type="number" min="1000" max="30000" step="500"></div>
-          <div class="field"><label>历史条数（0–300）</label><input id="aiDmHistMsgs" type="number" min="0" max="300"></div>
-          <div class="field"><label>历史字符（0–20000）</label><input id="aiDmHistChars" type="number" min="0" max="20000" step="500"></div>
-          <div class="field"><label>回复软上限（20–800）</label><input id="aiDmReplySoft" type="number" min="20" max="800" step="10"></div>
-          <div class="field"><label>回复硬上限（100–2000）</label><input id="aiDmReply" type="number" min="100" max="2000" step="50"></div>
-        </div>
-        <h3 style="margin-top:14px">频道</h3>
-        <div class="form-grid">
-          <div class="field"><label>上下文 tokens（800–30000）</label><input id="aiChCtxTokens" type="number" min="800" max="30000" step="500"></div>
-          <div class="field"><label>历史条数（0–300）</label><input id="aiChHistMsgs" type="number" min="0" max="300"></div>
-          <div class="field"><label>历史字符（200–20000）</label><input id="aiChHistChars" type="number" min="200" max="20000" step="500"></div>
-          <div class="field"><label>回复软上限（10–200）</label><input id="aiChReplySoft" type="number" min="10" max="200" step="5"></div>
-          <div class="field"><label>回复硬上限（50–500）</label><input id="aiChReply" type="number" min="50" max="500" step="10"></div>
-        </div>
-        <h3 style="margin-top:14px">圆桌</h3>
-        <div class="form-grid">
-          <div class="field"><label>上下文 tokens（800–12000）</label><input id="aiRtCtxTokens" type="number" min="800" max="12000" step="500"></div>
-          <div class="field"><label>带上最近几条（1–4）</label><input id="aiRtCtxMsgs" type="number" min="1" max="4"></div>
-          <div class="field"><label>回复软上限（10–120）</label><input id="aiRtReplySoft" type="number" min="10" max="120" step="5"></div>
-          <div class="field"><label>回复硬上限（30–300）</label><input id="aiRtReply" type="number" min="30" max="300" step="10"></div>
-          <div class="field"><label>内部资料字符上限（200–4000）</label><input id="aiProfileInternal" type="number" min="200" max="4000" step="100"></div>
-        </div>
-        <div class="muted" style="margin-top:8px">中文按 1 字≈1 token 保守估算；超出从最旧的历史开始丢。</div>
-      </div>
-
-      <div class="card"><div class="section-head"><div><h2>战绩记忆</h2><small>星/蓝战绩独立于对话历史，聊多久都不会忘</small></div><button class="btn sm" onclick="saveAIMemory()">保存记忆</button></div>
-        <div class="toggle-list">
-          <div class="toggle-row"><div><b>注入战绩</b><small>让 Agent 记得自己钓到过的星/蓝，聊起来更连贯</small></div><input type="checkbox" class="switch" id="aiMemoryInject"></div>
-          <div class="toggle-row"><div><b>知道自己上过鱼</b><small>虚拟上鱼只写库不发频道消息；打开后每轮补一句「你确实钓到过鱼」，避免角色明明上了鱼却说自己空军</small></div><input type="checkbox" class="switch" id="aiCatchBriefInject"></div>
-        </div>
-        <div class="form-grid cols3" style="margin-top:14px">
-          <div class="field"><label>最近几条（0–5）</label><input id="aiMemoryRecent" type="number" min="0" max="5"></div>
-          <div class="field"><label>最佳几条（0–5）</label><input id="aiMemoryBest" type="number" min="0" max="5"></div>
-          <div class="field"><label>最多保留（5–200）</label><input id="aiMemoryMaxRows" type="number" min="5" max="200"></div>
-        </div>
-      </div>
+      <div id="aiSettings-limits"></div>
       </div>
     </section>
     <script>
@@ -467,7 +348,7 @@ body.notice-on #view-fish.on{height:max(600px,calc(100vh - 204px))}
       const v=document.getElementById('view-ai');if(v)v.classList.add('on');
       const b=document.querySelector('.nav button[data-view="ai"]');if(b)b.classList.add('on');
       const t=document.getElementById('pageTitle');if(t)t.textContent='AI 助手';
-      const s=document.getElementById('pageSub');if(s)s.textContent='连接 · Agent · 说话 · 虚拟钓鱼与角色状态';
+      const s=document.getElementById('pageSub');if(s)s.textContent='连接 · 角色与订阅 · 说话 · 虚拟钓鱼 · 上下文与记忆';
       loadAI();
     }
     function aiTab(name){
@@ -491,77 +372,7 @@ body.notice-on #view-fish.on{height:max(600px,calc(100vh - 204px))}
         document.getElementById('aiModelID').value=d.model_id||'';
         document.getElementById('aiKey').value='';
         document.getElementById('aiKeyMasked').textContent=d.api_key_masked?'当前密钥：'+d.api_key_masked:'尚未配置密钥';
-        document.getElementById('aiOutbound').checked=st.outbound_enabled!=='0';
-        document.getElementById('aiWebSearch').checked=st.web_search_enabled==='1';
-        document.getElementById('aiEmergency').checked=st.emergency_stop==='1';
-        document.getElementById('aiSearchEndpoint').value=st.search_endpoint||'';
-        document.getElementById('aiMaxToolRounds').value=st.max_tool_rounds||'2';
-        document.getElementById('aiRoundtable').checked=st.roundtable_enabled==='1';
-        document.getElementById('aiRtSpeakers').value=st.roundtable_max_speakers||'3';
-        document.getElementById('aiRtTurns').value=st.roundtable_max_turns||'6';
-        document.getElementById('aiRtMS').value=st.roundtable_max_ms||'20000';
-        document.getElementById('aiRtCooldown').value=st.roundtable_cooldown_ms||'120000';
-        document.getElementById('aiRtHourly').value=st.roundtable_hourly_limit||'3';
-        document.getElementById('aiRtSpeech').value=st.roundtable_on_speech_chance||'0.2';
-        document.getElementById('aiRtChime').value=st.roundtable_chime_chance||'0.55';
-        document.getElementById('aiRtStreak').value=st.roundtable_max_streak||'3';
-        document.getElementById('aiRtGap').value=st.roundtable_gap_ms||'3000';
-        document.getElementById('aiActorEnabled').checked=st.ai_actor_enabled!=='0';
-        document.getElementById('aiActorFishMin').value=st.ai_actor_fishing_session_min_s||'1200';
-        document.getElementById('aiActorFishMax').value=st.ai_actor_fishing_session_max_s||'4800';
-        document.getElementById('aiActorRestMin').value=st.ai_actor_rest_min_s||'600';
-        document.getElementById('aiActorRestMax').value=st.ai_actor_rest_max_s||'2400';
-        document.getElementById('aiActorRestChance').value=st.ai_actor_rest_chance||'0.35';
-        document.getElementById('aiActorSwitchChance').value=st.ai_actor_switch_chance||'0.25';
-        document.getElementById('aiActorSwitchCooldown').value=st.ai_actor_switch_cooldown_s||'1800';
-        document.getElementById('aiFishing').checked=st.ai_fishing_enabled==='1';
-        syncAIStateSwitches();
-        document.getElementById('aiFishingHourly').value=st.ai_fishing_hourly_limit||'12';
-        document.getElementById('aiFishingBase').value=st.ai_fishing_base_interval_ms||'300000';
-        document.getElementById('aiFishingMax').value=st.ai_fishing_max_interval_ms||'600000';
-        document.getElementById('aiFishingStar').value=st.ai_fishing_star_weight||'0.02';
-        document.getElementById('aiFishingSuper').value=st.ai_fishing_super_weight||'0.002';
-        document.getElementById('aiFishingNear').value=st.ai_fishing_near_weight||'0.12';
-        document.getElementById('aiFishingMiss').value=st.ai_fishing_miss_weight||'0.33';
-        document.getElementById('aiFishingNearRatio').value=st.ai_fishing_near_ratio||'0.9';
-        document.getElementById('aiFishingMissRatio').value=st.ai_fishing_miss_ratio||'0.35';
-        document.getElementById('aiCatchTalk').checked=st.ai_catch_talk!=='0';
-        document.getElementById('aiCatchStarChance').value=st.ai_catch_star_chance||'0.6';
-        document.getElementById('aiCatchSuperChance').value=st.ai_catch_super_chance||'0.9';
-        document.getElementById('aiCatchRoundtable').value=st.ai_catch_roundtable_chance||'0.5';
-        document.getElementById('aiDmCtxTokens').value=st.ai_profile_dm_context_tokens||'12000';
-        document.getElementById('aiDmHistMsgs').value=st.ai_profile_dm_history_messages||'200';
-        document.getElementById('aiDmHistChars').value=st.ai_profile_dm_history_chars||'8000';
-        document.getElementById('aiDmReply').value=st.ai_profile_dm_reply_chars||'120';
-        document.getElementById('aiDmReplySoft').value=st.ai_profile_dm_reply_soft_chars||'80';
-        document.getElementById('aiChCtxTokens').value=st.ai_profile_channel_context_tokens||'10000';
-        document.getElementById('aiChHistMsgs').value=st.ai_profile_channel_history_messages||'150';
-        document.getElementById('aiChHistChars').value=st.ai_profile_channel_history_chars||'6000';
-        document.getElementById('aiChReply').value=st.ai_profile_channel_reply_chars||'45';
-        document.getElementById('aiChReplySoft').value=st.ai_profile_channel_reply_soft_chars||'25';
-        document.getElementById('aiRtCtxTokens').value=st.ai_profile_roundtable_context_tokens||'4000';
-        document.getElementById('aiRtCtxMsgs').value=st.ai_profile_roundtable_context_messages||'2';
-        document.getElementById('aiRtReply').value=st.ai_profile_roundtable_reply_chars||'30';
-        document.getElementById('aiRtReplySoft').value=st.ai_profile_roundtable_reply_soft_chars||'20';
-        document.getElementById('aiProfileInternal').value=st.ai_profile_internal_chars||'800';
-        document.getElementById('aiMemoryInject').checked=st.ai_memory_inject!=='0';
-        document.getElementById('aiCatchBriefInject').checked=st.ai_catch_brief_inject!=='0';
-        document.getElementById('aiMemoryRecent').value=st.ai_memory_recent||'3';
-        document.getElementById('aiMemoryBest').value=st.ai_memory_best||'2';
-        document.getElementById('aiMemoryMaxRows').value=st.ai_memory_max_rows||'50';
-        renderToolPicker('aiNewTools',[]);
-        window.AI_AGENTS=d.agents||[];
-        const b=d.bridge||{};
-        document.getElementById('aiBridgeStatus').textContent=b.online?'在线':'离线（看 logs/aibridge.log）';
-        document.getElementById('aiStatusModel').textContent=d.model_id||'未配置';
-        document.getElementById('aiStatusOutbound').textContent=(st.outbound_enabled!=='0'&&st.emergency_stop!=='1')?'开':'关';
-        document.getElementById('aiStatusRoundtable').textContent=st.roundtable_enabled==='1'?'开':'关';
-        document.getElementById('aiStatusFishing').textContent=st.ai_fishing_enabled==='1'?'开':'关';
-        const q=d.queue||{};
-        document.getElementById('aiStatusQueue').textContent=(q.pending||0)+' 待处理 · '+(q.processing||0)+' 处理中';
-        const le=d.last_error||{};
-        document.getElementById('aiLastError').textContent=le.error?('最近一次失败：'+(le.agent||'')+' · '+(le.error||'')):'最近没有失败记录';
-        document.getElementById('aiTestResult').textContent='';
+        renderAISettings(d);
         renderAgentList(d.agents||[]);
         loadAIChannels();
         loadAIMaps();
@@ -647,6 +458,7 @@ body.notice-on #view-fish.on{height:max(600px,calc(100vh - 204px))}
           <div class="agent-state-row">
             <div class="state-main">
               <label class="switch-label"><input type="checkbox" class="switch" ${(a.joined&&window.AI_ACTOR_MASTER!==false)?'':'disabled'} ${a.actor_enabled?'checked':''} onchange="saveAIActor('${a.key}',this.checked,false)"> 角色模拟</label>
+              <label class="switch-label" style="margin-left:14px"><input type="checkbox" class="switch" ${a.fishing_talk_enabled?'checked':''} onchange="saveAIFishingTalk('${a.key}',this.checked)"> 上鱼报话</label>
               ${actorMeta(a)}
             </div>
             <span class="state-note">关闭=永远不钓；打开后会自己决定钓鱼/休息/闲逛</span>
@@ -677,84 +489,74 @@ body.notice-on #view-fish.on{height:max(600px,calc(100vh - 204px))}
       try{await api('/api/ai/settings',{method:'POST',body:JSON.stringify(body)});toast(msg||'已保存');loadAI()}
       catch(e){toast(e.message,'bad')}
     }
-    function saveAIBasic(){
-      postAISettings({
-        outbound_enabled:aiBool('aiOutbound'),web_search_enabled:aiBool('aiWebSearch'),
-        emergency_stop:aiBool('aiEmergency'),max_tool_rounds:aiNum('aiMaxToolRounds',2),
-        search_endpoint:aiStr('aiSearchEndpoint')},'总开关已保存');
-    }
-    function saveAIRoundtable(){
-      postAISettings({
-        roundtable_enabled:aiBool('aiRoundtable'),
-        roundtable_max_speakers:aiNum('aiRtSpeakers',3),roundtable_max_turns:aiNum('aiRtTurns',6),
-        roundtable_max_ms:aiNum('aiRtMS',20000),roundtable_cooldown_ms:aiNum('aiRtCooldown',120000),
-        roundtable_hourly_limit:aiNum('aiRtHourly',3),
-        roundtable_on_speech_chance:aiNum('aiRtSpeech',0.2),
-        roundtable_chime_chance:aiNum('aiRtChime',0.55),
-        roundtable_gap_ms:aiNum('aiRtGap',3000),
-        roundtable_max_streak:aiNum('aiRtStreak',3)},'圆桌设置已保存');
-    }
-    // 「角色状态」是总闸；关掉时虚拟钓鱼开关不可用，避免看起来开了却在空转。
-    function syncAIStateSwitches(){
-      const master=document.getElementById('aiActorEnabled');
-      const fish=document.getElementById('aiFishing');
-      if(!master||!fish)return;
-      window.AI_ACTOR_MASTER=master.checked;
-      fish.disabled=!master.checked;
-      const row=fish.closest('.toggle-row');
-      if(row)row.classList.toggle('is-disabled',!master.checked);
+    // 设置界面完全由后端注册表驱动：新增参数只改 ai_settings.go 一行，
+    // 前端不用动。tab 是大类导航，卡片按「模块」分，高级参数默认折叠。
+    const AI_TAB_MODULES={
+      conn:['conn'],
+      talk:['talk','player_react','fishing_talk'],
+      fishing:['fishing','actor'],
+      limits:['budget','memory']
+    };
+    function renderAISettings(d){
+      const specs=d.specs||[], modules=d.modules||[], values=d.settings||{};
+      window.AI_SPECS=specs;
+      window.AI_SETTINGS=values;
+      window.AI_ACTOR_MASTER=values.ai_actor_enabled!=='0';
+      const byId={}; modules.forEach(m=>byId[m.id]=m);
+      for(const [tab,ids] of Object.entries(AI_TAB_MODULES)){
+        const box=document.getElementById('aiSettings-'+tab);
+        if(!box)continue;
+        let html='';
+        for(const id of ids){
+          const mod=byId[id]||{title:id,hint:''};
+          const items=specs.filter(s=>s.module===id);
+          if(!items.length)continue;
+          const normal=items.filter(s=>!s.advanced), advanced=items.filter(s=>s.advanced);
+          html+='<div class="card" style="margin-top:16px"><div class="section-head"><div><h2>'+esc(mod.title)+'</h2><small>'+esc(mod.hint)+'</small></div>'
+              +'<button class="btn sm" onclick="saveAIModule(\''+id+'\')">保存'+esc(mod.title)+'</button></div>';
+          html+=settingFieldsHTML(normal,values);
+          if(advanced.length){
+            html+='<details style="margin-top:12px"><summary style="cursor:pointer">高级参数（'+advanced.length+' 项，一般不用改）</summary>'
+                 +'<div style="margin-top:12px">'+settingFieldsHTML(advanced,values)+'</div></details>';
+          }
+          html+='</div>';
+        }
+        box.innerHTML=html;
+      }
+      // 旧卡片里依赖总闸联动的逻辑不再需要；保留这个全局供 Agent 列表用。
       if(window.AI_AGENTS)renderAgentList(window.AI_AGENTS);
     }
-    function saveAIFishingState(){
-      postAISettings({
-        ai_actor_enabled:aiBool('aiActorEnabled'),
-        ai_actor_fishing_session_min_s:aiNum('aiActorFishMin',1200),
-        ai_actor_fishing_session_max_s:aiNum('aiActorFishMax',4800),
-        ai_actor_rest_min_s:aiNum('aiActorRestMin',600),
-        ai_actor_rest_max_s:aiNum('aiActorRestMax',2400),
-        ai_actor_rest_chance:aiNum('aiActorRestChance',0.35),
-        ai_actor_switch_chance:aiNum('aiActorSwitchChance',0.25),
-        ai_actor_switch_cooldown_s:aiNum('aiActorSwitchCooldown',1800),
-        ai_fishing_enabled:aiBool('aiFishing'),
-        ai_fishing_hourly_limit:aiNum('aiFishingHourly',12),
-        ai_fishing_base_interval_ms:aiNum('aiFishingBase',300000),
-        ai_fishing_max_interval_ms:aiNum('aiFishingMax',600000),
-        ai_fishing_super_weight:aiNum('aiFishingSuper',0.002),
-        ai_fishing_star_weight:aiNum('aiFishingStar',0.02),
-        ai_fishing_near_weight:aiNum('aiFishingNear',0.12),
-        ai_fishing_miss_weight:aiNum('aiFishingMiss',0.33),
-        ai_fishing_near_ratio:aiNum('aiFishingNearRatio',0.9),
-        ai_fishing_miss_ratio:aiNum('aiFishingMissRatio',0.35),
-        ai_catch_talk:aiBool('aiCatchTalk'),
-        ai_catch_star_chance:aiNum('aiCatchStarChance',0.6),
-        ai_catch_super_chance:aiNum('aiCatchSuperChance',0.9),
-        ai_catch_roundtable_chance:aiNum('aiCatchRoundtable',0.5)},'钓鱼与角色状态已保存');
+    function settingFieldsHTML(items,values){
+      if(!items.length)return '';
+      let html='<div class="toggle-list">';
+      for(const s of items){
+        const v=values[s.key]!==undefined?values[s.key]:s.def;
+        const id='aiSet_'+s.key;
+        let input;
+        if(s.kind==='bool'){
+          input='<input type="checkbox" class="switch" id="'+id+'" data-key="'+esc(s.key)+'" data-kind="bool" '+(v==='1'?'checked':'')+'>';
+        }else if(s.kind==='string'){
+          input='<input id="'+id+'" data-key="'+esc(s.key)+'" data-kind="string" value="'+esc(v)+'" placeholder="可留空" style="width:220px">';
+        }else{
+          const step=s.kind==='float'?(s.max<=1?'0.05':'1'):'1';
+          input='<input id="'+id+'" type="number" data-key="'+esc(s.key)+'" data-kind="'+s.kind+'" value="'+esc(v)+'" min="'+s.min+'" max="'+s.max+'" step="'+step+'" style="width:140px">';
+        }
+        html+='<div class="toggle-row"><div><b>'+esc(s.label)+'</b><small>'+esc(s.hint)+'</small></div>'+input+'</div>';
+      }
+      return html+'</div>';
     }
-    function saveAIProfile(){
-      postAISettings({
-        ai_profile_internal_chars:aiNum('aiProfileInternal',800),
-        ai_profile_dm_context_tokens:aiNum('aiDmCtxTokens',12000),
-        ai_profile_dm_history_messages:aiNum('aiDmHistMsgs',200),
-        ai_profile_dm_history_chars:aiNum('aiDmHistChars',8000),
-        ai_profile_dm_reply_soft_chars:aiNum('aiDmReplySoft',80),
-        ai_profile_dm_reply_chars:aiNum('aiDmReply',120),
-        ai_profile_channel_context_tokens:aiNum('aiChCtxTokens',10000),
-        ai_profile_channel_history_messages:aiNum('aiChHistMsgs',150),
-        ai_profile_channel_history_chars:aiNum('aiChHistChars',6000),
-        ai_profile_channel_reply_soft_chars:aiNum('aiChReplySoft',25),
-        ai_profile_channel_reply_chars:aiNum('aiChReply',45),
-        ai_profile_roundtable_context_tokens:aiNum('aiRtCtxTokens',4000),
-        ai_profile_roundtable_context_messages:aiNum('aiRtCtxMsgs',2),
-        ai_profile_roundtable_reply_soft_chars:aiNum('aiRtReplySoft',20),
-        ai_profile_roundtable_reply_chars:aiNum('aiRtReply',30)},'上限已保存');
-    }
-    function saveAIMemory(){
-      postAISettings({
-        ai_memory_inject:aiBool('aiMemoryInject'),
-        ai_catch_brief_inject:aiBool('aiCatchBriefInject'),
-        ai_memory_recent:aiNum('aiMemoryRecent',3),
-        ai_memory_best:aiNum('aiMemoryBest',2),
-        ai_memory_max_rows:aiNum('aiMemoryMaxRows',50)},'记忆设置已保存');
+    async function saveAIModule(moduleId){
+      const specs=(window.AI_SPECS||[]).filter(s=>s.module===moduleId);
+      const body={};
+      for(const s of specs){
+        const el=document.getElementById('aiSet_'+s.key);
+        if(!el)continue;
+        if(s.kind==='bool')body[s.key]=el.checked;
+        else if(s.kind==='string')body[s.key]=el.value.trim();
+        else if(el.value!=='')body[s.key]=Number(el.value);
+      }
+      if(!Object.keys(body).length){toast('没有可保存的项','bad');return}
+      await postAISettings(body,'已保存');
     }
 
     // 工具目录来自后端，前台只负责渲染，避免"别人不知道有哪些工具"。
@@ -815,6 +617,13 @@ body.notice-on #view-fish.on{height:max(600px,calc(100vh - 204px))}
         await api('/api/ai/agent/behavior',{method:'POST',body:JSON.stringify({key:key,reply_mode:mode,talkativeness:Number(talk)||0})});
         toast('已更新 '+key+' 的说话方式');reloadAgents();
       }catch(e){toast(e.message,'bad');reloadAgents()}
+    }
+    async function saveAIFishingTalk(key,on){
+      try{
+        await api('/api/ai/agent/fishing-talk',{method:'POST',body:JSON.stringify({key:key,enabled:on})});
+        toast((on?'已允许 ':'已关闭 ')+key+' 上鱼后主动报话');
+        reloadAgents();
+      }catch(e){toast(e.message,'bad')}
     }
     async function saveAIActor(key,on,reroll){
       try{
