@@ -87,7 +87,8 @@ func (s *Server) handleAIStatus(w http.ResponseWriter, r *http.Request) {
 		"ai_profile_channel_history_chars", "ai_profile_channel_reply_chars", "ai_profile_channel_reply_soft_chars",
 		"ai_profile_roundtable_context_tokens", "ai_profile_roundtable_context_messages",
 		"ai_profile_roundtable_reply_chars", "ai_profile_roundtable_reply_soft_chars",
-		"ai_memory_inject", "ai_memory_recent", "ai_memory_best", "ai_memory_max_rows"} {
+		"ai_memory_inject", "ai_memory_recent", "ai_memory_best", "ai_memory_max_rows",
+		"ai_global_subscribe", "ai_global_subscribe_include_silent"} {
 		settings[k] = s.db.AISetting(ctx, k, "")
 	}
 	var baseURL, modelID, providerName, masked string
@@ -299,6 +300,10 @@ func (s *Server) handleAISettingsSave(w http.ResponseWriter, r *http.Request) {
 		MemoryRecent  *int  `json:"ai_memory_recent"`
 		MemoryBest    *int  `json:"ai_memory_best"`
 		MemoryMaxRows *int  `json:"ai_memory_max_rows"`
+
+		// 全局回复：打开后所有已接入助手在任何频道都能接话。
+		GlobalSubscribe       *bool `json:"ai_global_subscribe"`
+		GlobalSubscribeSilent *bool `json:"ai_global_subscribe_include_silent"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		httpError(w, 400, "请求格式错误")
@@ -510,6 +515,12 @@ func (s *Server) handleAISettingsSave(w http.ResponseWriter, r *http.Request) {
 	if req.MemoryMaxRows != nil {
 		set("ai_memory_max_rows", strconv.Itoa(clamp(*req.MemoryMaxRows, 5, 200)))
 	}
+	if req.GlobalSubscribe != nil {
+		set("ai_global_subscribe", boolStr(*req.GlobalSubscribe))
+	}
+	if req.GlobalSubscribeSilent != nil {
+		set("ai_global_subscribe_include_silent", boolStr(*req.GlobalSubscribeSilent))
+	}
 	if err := s.db.AISetSettings(ctx, updates); err != nil {
 		httpError(w, 500, "设置保存失败")
 		return
@@ -588,8 +599,31 @@ func (s *Server) handleAIChannels(w http.ResponseWriter, r *http.Request) {
 			})
 		}
 	}
+	// 地图级订阅：官服一张图有十几个到上百个区域频道，按地图订阅才不用逐个拉。
+	maps := []map[string]any{}
+	if list, err := s.db.AIListMaps(ctx); err == nil {
+		for _, m := range list {
+			maps = append(maps, map[string]any{
+				"map_key": m.MapKey, "label": m.Label, "count": m.Count, "agents": m.Agents,
+			})
+		}
+	}
+	// 当前频道所属的地图：让后台能直接显示「这个频道归哪张图管」。
+	curMap, curMapKey := "", ""
+	if k, ok := s.db.ChannelMapKey(ctx, channel); ok {
+		curMapKey = k
+		for _, m := range maps {
+			if mm, ok := m["map_key"].(string); ok && mm == k {
+				if lb, ok := m["label"].(string); ok {
+					curMap = lb
+				}
+			}
+		}
+	}
 	writeJSON(w, map[string]any{
-		"channel": channel, "agents": agents, "subscribed": subscribed, "channels": channels,
+		"channel": channel, "agents": agents, "subscribed": subscribed,
+		"channels": channels, "maps": maps,
+		"channel_map_key": curMapKey, "channel_map_label": curMap,
 	})
 }
 
@@ -599,12 +633,32 @@ func (s *Server) handleAIChannelSave(w http.ResponseWriter, r *http.Request) {
 		Agent   string  `json:"agent"`
 		Enabled bool    `json:"enabled"`
 		Label   *string `json:"label"`
+		MapKey  string  `json:"map_key"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Channel == "" {
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		httpError(w, 400, "请求格式错误")
 		return
 	}
 	ctx := r.Context()
+	// 地图级订阅：map_key 非空时按地图写，与精确频道订阅互不影响。
+	if req.MapKey != "" {
+		if req.Agent == "" {
+			httpError(w, 400, "请选择 Agent")
+			return
+		}
+		if err := s.db.AISetMapAgent(ctx, req.MapKey, req.Agent, req.Enabled); err != nil {
+			httpError(w, 500, "地图订阅保存失败")
+			return
+		}
+		_ = s.db.AuditLogWrite(ctx, adminOf(r), "ai_map_agent", req.MapKey,
+			"agent="+req.Agent+" enabled="+strconv.FormatBool(req.Enabled))
+		writeJSON(w, map[string]any{"ok": true})
+		return
+	}
+	if req.Channel == "" {
+		httpError(w, 400, "请求格式错误")
+		return
+	}
 	if req.Label != nil {
 		if err := s.db.AISetChannelLabel(ctx, req.Channel, strings.TrimSpace(*req.Label)); err != nil {
 			httpError(w, 500, "显示名保存失败")

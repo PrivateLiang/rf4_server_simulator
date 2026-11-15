@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -735,6 +736,14 @@ type AIChannelInfo struct {
 	Agents []string
 }
 
+// AIMapInfo 是后台地图级订阅下拉的一项。
+type AIMapInfo struct {
+	MapKey string
+	Label  string
+	Count  int
+	Agents []string
+}
+
 // AIUpsertChannel 记录客户端实际用过的频道名（切频道时调用）。
 func (d *DB) AIUpsertChannel(ctx context.Context, name string) error {
 	if name == "" {
@@ -803,17 +812,93 @@ func (d *DB) AIChannelCooldownMS(ctx context.Context, channel string) int {
 	return v
 }
 
-// AIChannelAgents 返回频道已接入的全部 Agent（按优先级）。
+// ChannelMapKey 把频道名解析成它所属的地图 key。
+//
+// 官服频道名形如 nav<地图序号>_<图内区域序号>：nav 前缀的数字就是该地图
+// level_0NN_xxx 的 NN。实测 13 张有 nav 数组的图全部命中，无需映射表。
+// 补零不统一（nav1 与 nav03 都存在），所以按数字解析而不是按固定宽度切串。
+//
+// 解析不出地图时返回 ("", false)：调用方降级为「精确订阅 ∪ 全局」，
+// 不报错、不静默丢弃。私人频道（玩家自建，名字不遵循 nav 命名）也走这条路。
+func (d *DB) ChannelMapKey(ctx context.Context, channel string) (string, bool) {
+	channel = strings.TrimSpace(channel)
+	if !strings.HasPrefix(channel, "nav") {
+		return "", false
+	}
+	rest := channel[len("nav"):]
+	i := 0
+	for i < len(rest) && rest[i] >= '0' && rest[i] <= '9' {
+		i++
+	}
+	if i == 0 {
+		return "", false
+	}
+	num, err := strconv.Atoi(rest[:i])
+	if err != nil || num <= 0 {
+		return "", false
+	}
+	// level_%03d_ 前缀在地图清单里唯一，loc_alias 的 alias 是 level key。
+	// 注意 LIKE 里的下划线是单字符通配符，要用 ESCAPE 转义，否则 level_001_
+	// 会匹配不到 level_001_lake（缺 % 时）或误匹配别的 key。
+	var key string
+	err = d.SQL.QueryRowContext(ctx, `
+		SELECT alias FROM loc_alias
+		WHERE alias LIKE ? ESCAPE '\' ORDER BY alias LIMIT 1`,
+		"level\\_"+fmt.Sprintf("%03d", num)+"\\_%").Scan(&key)
+	if err != nil || key == "" {
+		return "", false
+	}
+	return key, true
+}
+
+// aiChannelAgentRows 是三源并集查询共用的列清单。
+const aiChannelAgentRows = `a.key, a.display, COALESCE(a.role,''), a.contact_uid, a.prompt,
+	       COALESCE(a.tools_json,'[]'), COALESCE(a.thinking_enabled,0),
+	       COALESCE(a.thinking_effort,''), COALESCE(a.enabled,1), COALESCE(a.joined,0),
+	       COALESCE(a.actor_enabled,0), COALESCE(a.reply_mode,'social'), COALESCE(a.talkativeness,50)`
+
+// AIChannelAgents 返回该频道可发言的全部 Agent。
+//
+// 可见性 = 地图级订阅 ∪ 精确频道订阅 ∪ （全局开关开启时的全部已接入 Agent）。
+// 官服一张图有十几个到上百个区域频道，只按精确频道订阅时玩家在图内切区域
+// 就会失聪，所以地图级订阅是主路径，精确订阅保留为高级用法。
+// 全局开关默认关，且默认不含 reply_mode='silent'（只看不说）的角色。
 func (d *DB) AIChannelAgents(ctx context.Context, channel string) ([]AIAgent, error) {
+	mapKey, hasMap := d.ChannelMapKey(ctx, channel)
+	// 无地图时把 map_key 参数置空串：ai_map_agent 里不会有空 map_key，
+	// 因此地图级来源自然为空，只剩精确订阅（私人频道走的就是这条路）。
+	mapArg := ""
+	if hasMap {
+		mapArg = mapKey
+	}
+
+	// 全局开关：开启后所有已接入且会主动接话的 Agent 在任何频道都能回复。
+	// 默认关；默认不含 reply_mode='silent'（只看不说）的角色。
+	globalOn := d.AISetting(ctx, "ai_global_subscribe", "0") == "1"
+	includeSilent := d.AISetting(ctx, "ai_global_subscribe_include_silent", "0") == "1"
+
+	globalSrc := ``
+	if globalOn {
+		globalSrc = `
+			UNION
+			SELECT a.id, a.key, 100 FROM ai_agent a
+				WHERE a.enabled=1 AND a.joined=1 AND a.deleted_ts=0
+				  AND (?=1 OR a.reply_mode<>'silent')`
+	}
+
 	rows, err := d.SQL.QueryContext(ctx, `
-		SELECT a.key, a.display, COALESCE(a.role,''), a.contact_uid, a.prompt,
-		       COALESCE(a.tools_json,'[]'), COALESCE(a.thinking_enabled,0),
-		       COALESCE(a.thinking_effort,''), COALESCE(a.enabled,1), COALESCE(a.joined,0),
-		       COALESCE(a.actor_enabled,0), COALESCE(a.reply_mode,'social'), COALESCE(a.talkativeness,50)
-		FROM ai_channel_agent c
-		JOIN ai_agent a ON a.id=c.agent_id AND a.enabled=1 AND a.deleted_ts=0
-		WHERE c.channel=? AND c.enabled=1
-		ORDER BY c.priority, a.id`, channel)
+		SELECT `+aiChannelAgentRows+`
+		FROM (
+			SELECT a.id, a.key, c.priority FROM ai_channel_agent c
+				JOIN ai_agent a ON a.id=c.agent_id
+				WHERE c.channel=? AND c.enabled=1
+			UNION
+			SELECT a.id, a.key, c.priority FROM ai_map_agent c
+				JOIN ai_agent a ON a.id=c.agent_id
+				WHERE c.map_key=? AND c.enabled=1`+globalSrc+`
+		) src
+		JOIN ai_agent a ON a.id=src.id AND a.enabled=1 AND a.deleted_ts=0
+		ORDER BY src.priority, a.id`, channel, mapArg, boolToInt(includeSilent))
 	if err != nil {
 		return nil, err
 	}
@@ -834,6 +919,13 @@ func (d *DB) AIChannelAgents(ctx context.Context, channel string) ([]AIAgent, er
 		out = append(out, a)
 	}
 	return out, rows.Err()
+}
+
+func boolToInt(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
 }
 
 // AIHasNewerHumanTask 判断圆桌期间是否有新的真人消息（人类优先，立即中止）。
@@ -935,12 +1027,116 @@ func (d *DB) AISetChannelAgent(ctx context.Context, channel, agentKey string, en
 	return err
 }
 
-// AIChannelSubscribed 返回某频道已订阅的 Agent（后台展示用）。
-func (d *DB) AIChannelSubscribed(ctx context.Context, channel string) ([]string, error) {
+// AISetMapAgent 把 Agent 拉进或移出地图（后台地图级订阅勾选）。
+// 订阅一张地图 = 该图所有区域频道都能发言，是官服频道体系下的主路径。
+func (d *DB) AISetMapAgent(ctx context.Context, mapKey, agentKey string, enable bool) error {
+	mapKey = strings.TrimSpace(mapKey)
+	if mapKey == "" || agentKey == "" {
+		return nil
+	}
+	if !enable {
+		_, err := d.SQL.ExecContext(ctx, `
+			DELETE FROM ai_map_agent
+			WHERE map_key=? AND agent_id=(SELECT id FROM ai_agent WHERE key=?)`, mapKey, agentKey)
+		return err
+	}
+	_, err := d.SQL.ExecContext(ctx, `
+		INSERT OR IGNORE INTO ai_map_agent(map_key,agent_id,enabled,priority,cooldown_ms,added_by,added_ts)
+		SELECT ?, id, 1, 100, 8000, 'admin', ? FROM ai_agent WHERE key=?`, mapKey, nowTS(), agentKey)
+	return err
+}
+
+// AIListMaps 返回全部地图 key + 中文名 + 已订阅的 Agent 名单。
+// 地图来源 = loc_alias 里 level_ 前缀的行（即地图清单），不依赖玩家是否到过。
+func (d *DB) AIListMaps(ctx context.Context) ([]AIMapInfo, error) {
 	rows, err := d.SQL.QueryContext(ctx, `
-		SELECT a.key FROM ai_channel_agent c
-		JOIN ai_agent a ON a.id=c.agent_id
-		WHERE c.channel=? AND c.enabled=1 ORDER BY c.priority, a.id`, channel)
+		SELECT m.alias, COALESCE(m.loc,''), ag.display
+		FROM (SELECT alias, loc FROM loc_alias WHERE alias LIKE ? ESCAPE '\') m
+		LEFT JOIN ai_map_agent c ON c.map_key=m.alias AND c.enabled=1
+		LEFT JOIN ai_agent ag ON ag.id=c.agent_id AND ag.enabled=1 AND ag.deleted_ts=0
+		ORDER BY m.alias`, `level\_%`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	order := make([]string, 0, 8)
+	byKey := map[string]*AIMapInfo{}
+	for rows.Next() {
+		var key, label string
+		var display sql.NullString
+		if err := rows.Scan(&key, &label, &display); err != nil {
+			return nil, err
+		}
+		info, ok := byKey[key]
+		if !ok {
+			info = &AIMapInfo{MapKey: key, Label: label}
+			byKey[key] = info
+			order = append(order, key)
+		}
+		if display.Valid && display.String != "" {
+			info.Agents = append(info.Agents, display.String)
+			info.Count++
+		}
+	}
+	out := make([]AIMapInfo, 0, len(order))
+	for _, key := range order {
+		out = append(out, *byKey[key])
+	}
+	return out, rows.Err()
+}
+
+// AIMapAgents 返回订阅了某地图的 Agent key 列表（后台展示用）。
+func (d *DB) AIMapAgents(ctx context.Context, mapKey string) ([]string, error) {
+	rows, err := d.SQL.QueryContext(ctx, `
+		SELECT a.key FROM ai_map_agent c
+		JOIN ai_agent a ON a.id=c.agent_id AND a.enabled=1 AND a.deleted_ts=0
+		WHERE c.map_key=? AND c.enabled=1 ORDER BY c.priority, a.id`, mapKey)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var k string
+		if err := rows.Scan(&k); err != nil {
+			return nil, err
+		}
+		out = append(out, k)
+	}
+	return out, rows.Err()
+}
+
+// AIChannelSubscribed 返回该频道可发言的 Agent key 列表（后台展示、钓鱼选人）。
+// 与 AIChannelAgents 同一套可见性口径：地图级 ∪ 精确 ∪ （全局开关开启时全部）。
+func (d *DB) AIChannelSubscribed(ctx context.Context, channel string) ([]string, error) {
+	mapKey, hasMap := d.ChannelMapKey(ctx, channel)
+	mapArg := ""
+	if hasMap {
+		mapArg = mapKey
+	}
+	globalOn := d.AISetting(ctx, "ai_global_subscribe", "0") == "1"
+	includeSilent := d.AISetting(ctx, "ai_global_subscribe_include_silent", "0") == "1"
+
+	globalSrc := ``
+	if globalOn {
+		globalSrc = `
+			UNION
+			SELECT a.id, a.key, 100 FROM ai_agent a
+				WHERE a.enabled=1 AND a.joined=1 AND a.deleted_ts=0
+				  AND (?=1 OR a.reply_mode<>'silent')`
+	}
+	rows, err := d.SQL.QueryContext(ctx, `
+		SELECT a.key FROM (
+			SELECT a.id, a.key, c.priority FROM ai_channel_agent c
+				JOIN ai_agent a ON a.id=c.agent_id
+				WHERE c.channel=? AND c.enabled=1
+			UNION
+			SELECT a.id, a.key, c.priority FROM ai_map_agent c
+				JOIN ai_agent a ON a.id=c.agent_id
+				WHERE c.map_key=? AND c.enabled=1`+globalSrc+`
+		) src
+		JOIN ai_agent a ON a.id=src.id AND a.enabled=1 AND a.deleted_ts=0
+		ORDER BY src.priority, a.id`, channel, mapArg, boolToInt(includeSilent))
 	if err != nil {
 		return nil, err
 	}

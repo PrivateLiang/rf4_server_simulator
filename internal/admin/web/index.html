@@ -326,14 +326,31 @@ body.notice-on #view-fish.on{height:max(600px,calc(100vh - 204px))}
       </div>
 
       <div class="ai-pane" id="aiPane-talk">
-      <div class="card"><div class="section-head"><div><h2>频道订阅</h2><small>只读取频道里现在有哪些 Agent；拉进/移出即时生效</small></div></div>
+      <div class="card"><div class="section-head"><div><h2>频道订阅</h2><small>官服一张图有十几个到上百个区域频道，地图级订阅一次管整张图</small></div></div>
         <div class="channel-grid">
-          <div class="field"><label>频道（只读）</label><select id="aiChannelName" onchange="loadAIChannels()"></select></div>
-          <div class="field"><label>要操作的 Agent</label><select id="aiChannelAgent"></select></div>
-          <div class="field"><label>&nbsp;</label><div class="actions" style="margin:0"><button class="btn sm" onclick="aiSubscribe(true)">拉进频道</button><button class="btn alt sm" onclick="aiSubscribe(false)">移出频道</button></div></div>
+          <div class="field"><label>地图（推荐：整张图生效）</label><select id="aiMapName" onchange="loadAIMaps()"></select></div>
+          <div class="field"><label>要操作的 Agent</label><select id="aiMapAgent"></select></div>
+          <div class="field"><label>&nbsp;</label><div class="actions" style="margin:0"><button class="btn sm" onclick="aiSubscribeMap(true)">拉进地图</button><button class="btn alt sm" onclick="aiSubscribeMap(false)">移出地图</button></div></div>
         </div>
-        <div id="aiChannelList" class="channel-list">读取中…</div>
-        <div class="muted" style="margin-top:8px">游戏里也可以直接说「@邀请 Agent 1」「@移出 Agent 1」。</div>
+        <div id="aiMapList" class="channel-list">读取中…</div>
+        <div class="muted" style="margin-top:8px">订阅一张地图 = 该图所有区域频道都能发言。玩家在图内换区域不会再失聪。</div>
+        <details style="margin-top:12px"><summary style="cursor:pointer">精确频道订阅（高级：只对某一个区域频道生效）</summary>
+          <div class="channel-grid" style="margin-top:10px">
+            <div class="field"><label>频道</label><select id="aiChannelName" onchange="loadAIChannels()"></select></div>
+            <div class="field"><label>要操作的 Agent</label><select id="aiChannelAgent"></select></div>
+            <div class="field"><label>&nbsp;</label><div class="actions" style="margin:0"><button class="btn sm" onclick="aiSubscribe(true)">拉进频道</button><button class="btn alt sm" onclick="aiSubscribe(false)">移出频道</button></div></div>
+          </div>
+          <div id="aiChannelList" class="channel-list">读取中…</div>
+          <div class="muted" style="margin-top:8px">游戏里也可以直接说「@邀请 Agent」「@移出 Agent」。</div>
+        </details>
+      </div>
+
+      <div class="card"><div class="section-head"><div><h2>全局回复</h2><small>例外模式：打开后所有已接入助手在任何频道都能接话</small></div></div>
+        <div class="toggle-list">
+          <div class="toggle-row"><div><b>全局随时回复</b><small>默认关。打开后忽略地图与频道订阅，任何频道都可能出现所有助手</small></div><input type="checkbox" class="switch" id="aiGlobalSubscribe"></div>
+          <div class="toggle-row"><div><b>包含「只看不说」的助手</b><small>默认不含。只看不说（silent）的角色默认不参与全局回复</small></div><input type="checkbox" class="switch" id="aiGlobalSubscribeSilent"></div>
+        </div>
+        <div class="actions" style="margin-top:10px"><button class="btn sm" onclick="saveAIGlobal()">保存全局设置</button></div>
       </div>
 
       <div class="card"><div class="section-head"><div><h2>Agent 圆桌</h2><small>不是轮流点名：被叫到的人先答，其余人按活跃度决定接不接；没人想接就自然冷场</small></div><button class="btn sm" onclick="saveAIRoundtable()">保存圆桌</button></div>
@@ -487,6 +504,8 @@ body.notice-on #view-fish.on{height:max(600px,calc(100vh - 204px))}
         document.getElementById('aiSearchEndpoint').value=st.search_endpoint||'';
         document.getElementById('aiMaxToolRounds').value=st.max_tool_rounds||'2';
         document.getElementById('aiRoundtable').checked=st.roundtable_enabled==='1';
+        document.getElementById('aiGlobalSubscribe').checked=st.ai_global_subscribe==='1';
+        document.getElementById('aiGlobalSubscribeSilent').checked=st.ai_global_subscribe_include_silent==='1';
         document.getElementById('aiRtSpeakers').value=st.roundtable_max_speakers||'3';
         document.getElementById('aiRtTurns').value=st.roundtable_max_turns||'6';
         document.getElementById('aiRtMS').value=st.roundtable_max_ms||'20000';
@@ -553,6 +572,7 @@ body.notice-on #view-fish.on{height:max(600px,calc(100vh - 204px))}
         document.getElementById('aiTestResult').textContent='';
         renderAgentList(d.agents||[]);
         loadAIChannels();
+        loadAIMaps();
       }catch(e){toast('读取 AI 设置失败：'+e.message,'bad')}
     }
     // 只刷新 Agent 列表与顶部状态，不动页面上正在编辑的表单。
@@ -574,6 +594,7 @@ body.notice-on #view-fish.on{height:max(600px,calc(100vh - 204px))}
         document.getElementById('aiLastError').textContent=le.error?('最近一次失败：'+(le.agent||'')+' · '+(le.error||'')):'最近没有失败记录';
         renderAgentList(window.AI_AGENTS);
         loadAIChannels();
+        loadAIMaps();
       }catch(e){toast('刷新 Agent 失败：'+e.message,'bad')}
     }
     // 说话方式的展示文案；空值按主动接话处理。
@@ -860,6 +881,31 @@ body.notice-on #view-fish.on{height:max(600px,calc(100vh - 204px))}
         document.getElementById('aiChannelList').textContent='已接入 '+(chosen.count||0)+' 个：'+((chosen.agents||[]).join('、')||'（无）');
         document.getElementById('aiChannelAgent').innerHTML=(d.agents||[]).map(a=>`<option value="${esc(a.key)}">${esc(a.display)}</option>`).join('');
       }catch(e){toast('读取频道订阅失败：'+e.message,'bad')}
+    }
+    async function loadAIMaps(){
+      const sel=document.getElementById('aiMapName');
+      const cur=sel.value||'';
+      try{
+        const d=await api('/api/ai/channels?name='+encodeURIComponent(document.getElementById('aiChannelName').value||'nav1_03'));
+        const list=d.maps||[];
+        sel.innerHTML=list.map(m=>`<option value="${esc(m.map_key)}">${esc(m.label?m.label+'（'+m.map_key+'）':m.map_key)}</option>`).join('');
+        if(cur&&list.some(m=>m.map_key===cur))sel.value=cur;
+        else if(d.channel_map_key&&list.some(m=>m.map_key===d.channel_map_key))sel.value=d.channel_map_key;
+        const chosen=list.find(m=>m.map_key===sel.value)||{};
+        document.getElementById('aiMapList').textContent='已订阅 '+(chosen.count||0)+' 个：'+((chosen.agents||[]).join('、')||'（无）');
+        document.getElementById('aiMapAgent').innerHTML=(d.agents||[]).map(a=>`<option value="${esc(a.key)}">${esc(a.display)}</option>`).join('');
+      }catch(e){toast('读取地图订阅失败：'+e.message,'bad')}
+    }
+    async function aiSubscribeMap(enable){
+      const mapKey=document.getElementById('aiMapName').value;
+      if(!mapKey){toast('请先选择地图','bad');return}
+      const body={map_key:mapKey,agent:document.getElementById('aiMapAgent').value,enabled:enable};
+      try{await api('/api/ai/channel',{method:'POST',body:JSON.stringify(body)});toast(enable?'已拉进地图':'已移出地图');loadAIMaps()}catch(e){toast(e.message,'bad')}
+    }
+    function saveAIGlobal(){
+      postAISettings({
+        ai_global_subscribe:aiBool('aiGlobalSubscribe'),
+        ai_global_subscribe_include_silent:aiBool('aiGlobalSubscribeSilent')},'全局回复设置已保存');
     }
     async function aiSubscribe(enable){
       const body={channel:document.getElementById('aiChannelName').value||'nav1_03',agent:document.getElementById('aiChannelAgent').value,enabled:enable};

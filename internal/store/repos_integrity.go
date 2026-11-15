@@ -41,7 +41,7 @@ var RuntimeTables = []string{
 	"fish_ecology", "skill_fish_effect_def", "hook_bite_profile", "fish_bait_override",
 	"ai_task", "ai_result", "ai_agent", "ai_provider", "ai_model", "ai_secret",
 	"ai_channel", "ai_channel_agent", "ai_setting", "ai_tool_job",
-	"ai_memory", "ai_actor_state", "ai_catch",
+	"ai_memory", "ai_actor_state", "ai_catch", "ai_map_agent",
 }
 
 // TableOwnership 返回每张用户表的唯一归属。静态、玩家、运行时三组必须互不相交。
