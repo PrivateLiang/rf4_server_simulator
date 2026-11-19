@@ -1,0 +1,217 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>AI 助手</title>
+</head>
+<body>
+<!-- 可信静态片段：无脚本、无行内事件/样式。由 /ai/ai.js 注入官方 #view-ai 挂载点。 -->
+<div class="ai-root" id="aiRoot" data-ai-fragment="1">
+  <div class="params-tabs ai-tabs" id="aiTabs" role="tablist" aria-label="AI 助手模块">
+    <button class="params-tab on" type="button" role="tab" aria-selected="true" data-ai-tab="overview" data-action="ai-tab" data-tab="overview">总览<small>四步开聊 · 状态与下一步</small></button>
+    <button class="params-tab" type="button" role="tab" aria-selected="false" data-ai-tab="conn" data-action="ai-tab" data-tab="conn">连接<small>厂商 · 密钥 · 搜索 · 急停</small></button>
+    <button class="params-tab" type="button" role="tab" aria-selected="false" data-ai-tab="agents" data-action="ai-tab" data-tab="agents">角色与订阅<small>新增 · 修改 · 接入 · 范围</small></button>
+    <button class="params-tab" type="button" role="tab" aria-selected="false" data-ai-tab="talk" data-action="ai-tab" data-tab="talk">说话与上下文<small>只管理预算</small></button>
+    <button class="params-tab" type="button" role="tab" aria-selected="false" data-ai-tab="fishing" data-action="ai-tab" data-tab="fishing">AI 虚拟钓鱼<small>模拟 · 渔获 · 战绩注入</small></button>
+    <button class="params-tab" type="button" role="tab" aria-selected="false" data-ai-tab="personality" data-action="ai-tab" data-tab="personality">性格与交互<small>当前角色 · 能力与生效</small></button>
+  </div>
+
+  <div class="ai-pane on" id="aiPane-overview">
+    <div class="ai-overview-grid">
+      <div class="card ai-overview-block">
+        <div class="section-head">
+          <div><h2>当前状态与下一步</h2><small>优先级：急停 → 需登录 → 缺 Key → 连接失败 → 命令等待 → 可试说</small></div>
+          <button class="btn alt sm" type="button" data-action="refresh-status">刷新</button>
+        </div>
+        <div class="ai-overview-status">
+          <b id="aiOverviewStatus">读取中…</b>
+          <span class="pill" id="aiOverviewPriority">待确认</span>
+        </div>
+        <div class="ai-overview-next" id="aiOverviewNext">正在读取四步状态…</div>
+        <div class="ai-overview-meta">
+          <span>aibridge <b id="aiBridgeStatus">读取中…</b></span>
+          <span>紧急停止 <b id="aiStatusEmergency">读取中…</b></span>
+        </div>
+        <div class="ai-overview-actions">
+          <button class="btn" type="button" id="aiOverviewPrimary" data-action="overview-next">准备中…</button>
+          <button class="btn alt" type="button" data-action="copy-hello">复制「你好」</button>
+        </div>
+        <ol class="ai-steps" id="aiSteps"></ol>
+        <div class="muted ai-hint-gap">四步目标 5 分钟：90 秒连接、45 秒建角色、45 秒接入、60 秒首句，另留 60 秒缓冲。超过预算时页面只提示卡在哪一步，不会替你发消息。</div>
+      </div>
+
+      <div class="card ai-overview-block">
+        <div class="section-head"><div><h2>数据去向</h2><small>只显示后端回读的实际配置，不拼地址</small></div></div>
+        <div class="ai-fact"><span>实际去向</span><b id="aiStatusDestination">未配置</b></div>
+        <div class="ai-fact"><span>保存状态</span><b id="aiSaveState">尚未保存可用连接</b></div>
+        <div class="ai-fact"><span>凭据</span><b id="aiKeyState">尚未配置密钥</b></div>
+        <div class="ai-fact"><span>复测</span><b id="aiStatusRetest">待复测</b></div>
+        <div class="muted ai-last-error" id="aiLastError">最近没有失败记录</div>
+      </div>
+
+      <div class="card ai-overview-block">
+        <div class="section-head"><div><h2>选中角色及活动</h2><small>接入、订阅、能力与首句都以这个角色为准</small></div></div>
+        <div class="field"><label for="aiSelectedAgent">当前角色</label><select id="aiSelectedAgent" data-change="select-agent"></select></div>
+        <div class="ai-fact"><span>接入（管理配置）</span><b id="aiSelectedJoined">待确认</b></div>
+        <div class="ai-fact"><span>玩家可见</span><b id="aiSelectedVisible">待确认</b></div>
+        <div class="ai-fact"><span>活动</span><b id="aiSelectedActivity">状态待确认</b></div>
+        <div class="ai-fact"><span>能力生效</span><b id="aiSelectedCapability">待确认</b></div>
+      </div>
+
+      <div class="card ai-overview-block">
+        <div class="section-head"><div><h2>首句</h2><small>在游戏里发，后台不代发、不产生假回复</small></div></div>
+        <div class="ai-hello" id="aiHelloText">你好</div>
+        <p class="muted" id="aiHelloGuide">先在「角色与订阅」创建一个角色，再接入游戏。</p>
+        <div class="ai-overview-actions">
+          <button class="btn alt sm" type="button" data-action="copy-hello">复制「你好」</button>
+          <button class="btn alt sm" type="button" data-action="refresh-status">刷新证据</button>
+        </div>
+        <div class="muted ai-hint-gap">游戏端证据只认：玩家真的私聊过该联系人，或收到过它发出的个人消息。只有「已接入」时显示待确认。</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="ai-pane" id="aiPane-conn">
+    <div class="card">
+      <div class="section-head"><div><h2>模型厂商与密钥</h2><small>保存即按修订发布；凭据外置加密，页面不回显</small></div></div>
+      <div class="form-grid">
+        <div class="field"><label for="aiBaseURL">厂商地址 base_url</label><input id="aiBaseURL" data-draft="1" placeholder="https://api.deepseek.com"></div>
+        <div class="field"><label for="aiModelID">模型 ID（按厂商官网填写）</label><input id="aiModelID" data-draft="1" placeholder="例如厂商当前可用的模型"></div>
+        <div class="field span2"><label for="aiKey">API Key（只写不读；留空仅在同源下沿用现有密钥）</label><input id="aiKey" type="password" data-draft="1" placeholder="sk-..."></div>
+      </div>
+      <div class="ai-overview-actions">
+        <button class="btn alt" type="button" data-action="test-ai">复测已保存连接</button>
+        <button class="btn" type="button" data-action="save-ai-config">保存厂商与密钥</button>
+        <span class="muted" id="aiTestResult"></span>
+      </div>
+      <div class="muted" id="aiConfigHint">复测只使用已保存的活动连接；页面草稿不会外发。</div>
+    </div>
+
+    <div class="card ai-emergency-card">
+      <div class="section-head"><div><h2>紧急停止</h2><small>优先级最高：保存后按回读值显示，勾选本身不等于已生效</small></div></div>
+      <div class="ai-emergency-row">
+        <label class="ai-switch-label" for="aiSet_emergency_stop"><input type="checkbox" class="switch" id="aiSet_emergency_stop" data-change="emergency-edit"> 切断所有模型调用</label>
+        <button class="btn bad" type="button" data-action="save-emergency">保存紧急停止</button>
+        <span class="muted">总览的急停状态与这里同一份数据；解除后需重新复测。</span>
+      </div>
+      <div class="muted" id="aiEmergencyHint">读取中…</div>
+    </div>
+
+    <div id="aiSettings-conn"></div>
+  </div>
+
+  <div class="ai-pane" id="aiPane-agents">
+    <div class="card">
+      <div class="section-head">
+        <div><h2>范围订阅</h2><small>普通地图/全局与精确频道（高级）分开；取消一个范围不会退出全部</small></div>
+        <span class="muted" id="aiSubSelected">未选择角色</span>
+      </div>
+      <div class="ai-channel-grid">
+        <div class="field"><label for="aiMapName">范围（地图整张生效 / 全局任何频道）</label><select id="aiMapName" data-change="load-ai-maps"></select></div>
+        <div class="ai-overview-actions">
+          <button class="btn sm" type="button" data-action="subscribe-map" data-enable="1">拉进范围</button>
+          <button class="btn alt sm" type="button" data-action="subscribe-map" data-enable="0">移出范围</button>
+        </div>
+      </div>
+      <div id="aiMapList" class="ai-channel-list">读取中…</div>
+      <div class="muted ai-hint-gap">「全局」= 该角色在任何频道都能接话；选地图 = 该图所有区域频道都能发言。移出游戏（不是移出范围）才会停止所有频道接话。</div>
+      <details class="ai-adv">
+        <summary>精确频道订阅（高级：只对某一个区域频道生效）</summary>
+        <div class="ai-channel-grid ai-channel-grid-inner">
+          <div class="field"><label for="aiChannelName">频道</label><select id="aiChannelName" data-change="load-ai-channels"></select></div>
+          <div class="ai-overview-actions">
+            <button class="btn sm" type="button" data-action="subscribe-channel" data-enable="1">拉进频道</button>
+            <button class="btn alt sm" type="button" data-action="subscribe-channel" data-enable="0">移出频道</button>
+          </div>
+        </div>
+        <div id="aiChannelList" class="ai-channel-list">读取中…</div>
+        <div class="muted ai-hint-gap">游戏里也可以直接说「@邀请 角色名」「@移出 角色名」。</div>
+      </details>
+    </div>
+
+    <div class="card ai-create-card">
+      <div class="section-head"><div><h2>新增 Agent</h2><small>UID 自动分配；用回已删除的 Key 会恢复原联系人与历史</small></div></div>
+      <div class="form-grid ai-form-cols3">
+        <div class="field"><label for="aiNewKey">Key（小写英文 / 数字 / - / _）</label><input id="aiNewKey" data-draft="1" placeholder="fishguide"></div>
+        <div class="field"><label for="aiNewDisplay">展示名</label><input id="aiNewDisplay" data-draft="1" placeholder="鱼情助手"></div>
+        <div class="field"><label for="aiNewRole">角色</label><input id="aiNewRole" data-draft="1" placeholder="本地鱼情顾问"></div>
+        <div class="field"><label for="aiNewEffort">思考档</label><select id="aiNewEffort" data-draft="1"><option value="off">off</option><option value="low">low</option><option value="medium">medium</option><option value="high">high</option><option value="max">max</option></select></div>
+        <div class="field span2"><label for="aiNewPrompt">系统提示词</label><textarea id="aiNewPrompt" rows="4" data-draft="1" placeholder="你是……只依据内部资料回答，缺数据就说不知道，不要编造。"></textarea></div>
+      </div>
+      <div class="ai-overview-actions">
+        <button class="btn" type="button" data-action="create-ai">新增 Agent</button>
+        <span class="muted">新增后默认「未接入」，不会影响原有查鱼助手与钓具助手；联系人 UID 由服务端写入。</span>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="section-head"><div><h2>Agent 列表</h2><small>卡片即状态：接入、玩家可见、思考档与能力生效</small></div><button class="btn alt sm" type="button" data-action="reload-agents">刷新</button></div>
+      <div class="toolbar ai-agent-toolbar">
+        <input class="grow" id="aiAgentSearch" placeholder="按名称 / Key / 角色筛选" data-input="filter-agents">
+        <span class="muted" id="aiAgentCount"></span>
+      </div>
+      <div id="aiAgentList" class="ai-agent-list"><div class="empty">读取中…</div></div>
+    </div>
+  </div>
+
+  <div class="ai-pane" id="aiPane-talk">
+    <div class="ai-note"><b>这里只管理预算。</b>频道、私聊、圆桌各自一份上下文与回复长度；资料预算独立。行为概率、圆桌细节与运行开关不再逐项提供，改由角色能力与性格侧决定。</div>
+    <div id="aiSettings-budget" class="ai-budget-grid"></div>
+  </div>
+
+  <div class="ai-pane" id="aiPane-fishing">
+    <div class="card">
+      <div class="section-head"><div><h2>当前角色</h2><small>虚拟钓鱼与渔获注入按角色生效；这里不生成「正在钓鱼」的假状态</small></div><span class="muted" id="aiFishingSelected">未选择角色</span></div>
+      <div class="form-grid ai-form-cols2">
+        <div class="field"><label for="aiFishingAgent">角色</label><select id="aiFishingAgent" data-change="select-agent"></select></div>
+        <div class="field"><label>渔获口径</label><div class="ai-fact-inline" id="aiFishingStats">待确认</div></div>
+      </div>
+      <div class="ai-fact"><span>活动状态</span><b id="aiFishingActor">状态待确认</b></div>
+      <div class="ai-fact"><span>最近诊断</span><b id="aiFishingDiagnostics">待确认</b></div>
+      <div class="ai-overview-actions">
+        <button class="btn alt sm" type="button" data-action="refresh-status">刷新状态</button>
+        <button class="btn bad sm" type="button" data-action="clear-memory">清除战绩摘要</button>
+      </div>
+    </div>
+    <div id="aiSettings-fishing"></div>
+  </div>
+
+  <div class="ai-pane" id="aiPane-personality">
+    <div class="card">
+      <div class="section-head"><div><h2>当前角色</h2><small>性格编辑由 T-107 接线；本票只固定角色并显示能力区</small></div><span class="muted" id="aiCapSelected">未选择角色</span></div>
+      <div class="form-grid ai-form-cols2">
+        <div class="field"><label for="aiCapAgent">角色</label><select id="aiCapAgent" data-change="select-agent"></select></div>
+        <div class="field"><label>配置与生效</label><div class="ai-fact-inline" id="aiCapState">待确认</div></div>
+      </div>
+      <div class="ai-note"><b>性格接线点（T-107）：</b>四维性格与评分按钮由 T-107 提供；本页不重复定义第二套性格参数，也不在这里填行为概率。事件运行消费归 T-108，比赛按已批范围处理。</div>
+    </div>
+
+    <div class="card">
+      <div class="section-head"><div><h2>能力</h2><small>读取 T-104 的实际可用集合；保存一次，应用与生效分开显示</small></div><button class="btn" type="button" data-action="save-capabilities">保存当前能力</button></div>
+      <div id="aiCapList" class="ai-cap-list">读取中…</div>
+      <div class="muted" id="aiCapResult">尚未保存</div>
+      <div class="ai-overview-actions">
+        <button class="btn alt" type="button" data-action="retry-capabilities">重试未应用部分</button>
+        <button class="btn alt" type="button" data-action="reload-capabilities">刷新生效状态</button>
+      </div>
+      <div id="aiCapCommands" class="ai-cap-commands"></div>
+    </div>
+
+    <div class="card">
+      <div class="section-head"><div><h2>运行来源与硬限制</h2><small>只读；这些不是管理员可填的概率</small></div></div>
+      <ul class="ai-limit-list">
+        <li>能力与工具名由服务端目录唯一决定；页面只提交能力 ID，不提交工具名。</li>
+        <li>保存写配置（AD），运行态由游戏服（GS）单写者应用；命令被拒绝时不会假称已生效。</li>
+        <li>攻略能力只给只读工具；虚拟垂钓关联服务端运行开关，事件类能力不新增任意发言/发鱼工具。</li>
+        <li>播报自己渔获需要同时具备参加圆桌；未满足时页面会提示，不静默提权。</li>
+        <li>比赛能力尚未接入（T-108 / 参赛支线），此行只说明原因，不可勾选。</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="ai-modal-bg" id="aiModalBg" hidden>
+    <div class="ai-modal" id="aiModal" role="dialog" aria-modal="true" tabindex="-1"></div>
+  </div>
+</div>
+</body>
+</html>

@@ -11,7 +11,7 @@ SOURCEDIR ?= $(subst \,/,$(CURDIR))
 GITCOMMIT ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
 LDFLAGS := -s -w -X 'rf4server/internal/buildinfo.Version=$(VERSION)' -X 'rf4server/internal/buildinfo.BuildTs=$(BUILDTS)' -X 'rf4server/internal/buildinfo.GitCommit=$(GITCOMMIT)' -X 'rf4server/internal/buildinfo.SourceDir=$(SOURCEDIR)'
 
-CMDS := gateway gameserver seed
+CMDS := gateway gameserver seed aibridge
 ifeq ($(OFFLINE_TOOLS),1)
 CMDS += import-character local-membership
 endif

@@ -9,6 +9,8 @@ import (
 	"rf4server/internal/wiregen"
 )
 
+// 原有虚拟联系人（查鱼助手、钓具助手）保持原样，不参与 AI 接入改造。
+// AI 联系人由后台创建并手动接入，查询封装在 ai_contacts.go，默认零接入。
 func isVirtualContact(uid int64) bool {
 	return uid == fishQueryContactUID || uid == gearAssistantUID
 }

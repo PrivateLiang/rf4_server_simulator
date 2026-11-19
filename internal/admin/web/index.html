@@ -209,6 +209,7 @@ body.notice-on #view-fish.on{height:max(600px,calc(100vh - 204px))}
 #baitTable tr.ba-open .clamp{display:block;overflow:visible;-webkit-line-clamp:unset}
 #baitTable .bait-head{display:flex;justify-content:space-between;align-items:flex-start;gap:8px}
 #baitTable .bait-edit{flex:none}
+
 .event-gift-editor{border:0;padding:0;margin:0;min-width:0}.event-gift-editor:disabled{opacity:.5}.event-gift-editor :disabled{cursor:not-allowed}.event-gift-status{margin:0 0 12px;padding:10px 12px;border:1px solid var(--line);border-radius:10px;background:#0c1927;color:var(--muted);font-size:12px;line-height:1.6}
 @media(max-width:720px){.event-gift-item{grid-template-columns:minmax(0,1fr) auto}.event-gift-item .picked{grid-column:1/-1;flex-direction:column;align-items:flex-start;gap:3px}.event-gift-item .picked b,.event-gift-item .picked span{max-width:100%}}
 </style>
@@ -233,6 +234,7 @@ body.notice-on #view-fish.on{height:max(600px,calc(100vh - 204px))}
     <nav class="nav" id="nav">
       <button class="on" data-view="dashboard" onclick="go('dashboard')"><span class="ico"><svg viewBox="0 0 24 24"><path d="M3 10.5 12 3l9 7.5"/><path d="M5 9.5V21h5v-6h4v6h5V9.5"/></svg></span><span class="txt"><b>总览</b><small>服务状态 · 在线 · 最近改动</small></span></button>
       <button data-view="players" onclick="go('players')"><span class="ico"><svg viewBox="0 0 24 24"><circle cx="9" cy="8" r="3.5"/><path d="M2.5 20c.8-3 3.4-4.5 6.5-4.5s5.7 1.5 6.5 4.5"/><circle cx="17" cy="9" r="2.5"/><path d="M17.5 15.6c2 .4 3.5 1.6 4 3.9"/></svg></span><span class="txt"><b>玩家管理</b><small>档案 · 资产 · 护鱼网 · 技能</small></span></button>
+      <button data-view="ai" onclick="go('ai')"><span class="ico"><svg viewBox="0 0 24 24"><rect x="4" y="6" width="16" height="12" rx="3"/><path d="M9 11h.01M15 11h.01M9 15h6"/></svg></span><span class="txt"><b>AI 助手</b><small>角色 · 说话方式 · 活动状态</small></span></button>
       <button data-view="stores" onclick="go('stores')"><span class="ico"><svg viewBox="0 0 24 24"><path d="M21 8v12a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V8"/><path d="M2 4h20v4H2z"/><path d="M10 12h4"/></svg></span><span class="txt"><b>商店与库存</b><small>改货架价格和库存</small></span></button>
       <button data-view="fish" onclick="go('fish')"><span class="ico"><svg viewBox="0 0 24 24"><path d="M6.5 12c1.2-3.3 4.3-5.5 7.5-5.5 3.5 0 6 2.5 7 5.5-1 3-3.5 5.5-7 5.5-3.2 0-6.3-2.2-7.5-5.5Z"/><path d="M17.5 11v.01"/><path d="M6.5 12 3 9v6l3.5-3Z"/></svg></span><span class="txt"><b>钓场与鱼口</b><small>玩法开关 · 出什么鱼 · 咬钩快慢</small></span></button>
       <button data-view="hooks" onclick="go('hooks')"><span class="ico"><svg viewBox="0 0 24 24"><path d="M15 3v10a6 6 0 1 1-12 0V9"/><path d="M15 3l3 3-3 3"/></svg></span><span class="txt"><b>钩子手感</b><small>真实型号 · 入口容量 · 咬口概率</small></span></button>
@@ -266,6 +268,8 @@ body.notice-on #view-fish.on{height:max(600px,calc(100vh - 204px))}
     <section class="view" id="view-release"><div class="card release-card"><div class="section-head"><div><h2>发布说明</h2><p class="muted">读取发布包内的 发布说明.md</p></div><button class="btn alt sm" onclick="loadReleaseNotes()">刷新</button></div><div class="markdown-body release-markdown" id="releaseBody"><div class="empty">读取中…</div></div></div></section>
     <section class="view" id="view-about"><div class="card about-card"><div class="about-head"><div><h2>关于本项目</h2><p>内容来自 README.md · 优先读取本地文件</p></div><a class="btn alt sm" href="https://github.com/OpenFisherCommunity/rf4_server_simulator" target="_blank" rel="noreferrer">在 GitHub 查看</a></div><div class="markdown-body" id="aboutReadme"><div class="empty">读取中…</div></div></div></section>
     <section class="view" id="view-audit"><div class="card"><div class="section-head"><h2>最近操作</h2><small>最新 200 条</small></div><div class="table-wrap" id="auditTable"></div></div></section>
+    <section class="view" id="view-ai"></section>
+
   </main>
 </div>
 <div class="modal-bg" id="modalBg" onclick="if(event.target===this)closeModal()"><div class="modal" id="modal"></div></div>
@@ -336,16 +340,71 @@ async function doLogin(e){
     TOKEN=d.token;localStorage.setItem('rf4_admin_token',TOKEN);await boot();
   }catch(e){toast(e.message,'bad')}
 }
-function logout(){clearInterval(REFRESH_TIMER);REFRESH_TIMER=null;TOKEN='';localStorage.removeItem('rf4_admin_token');$('#app').style.display='none';$('#login').style.display='grid'}
+function logout(){
+  clearInterval(REFRESH_TIMER);REFRESH_TIMER=null;
+  leaveExternalView();
+  LOGOUT_HOOKS.slice().forEach(fn=>{try{fn()}catch(e){}});
+  TOKEN='';localStorage.removeItem('rf4_admin_token');$('#app').style.display='none';$('#login').style.display='grid';
+}
+// 外部视图注册点（当前只有 /ai/ai.js）：模块就绪前 #ai 不被默认分支改成 dashboard。
+const EXTERNAL_VIEWS={},EXTERNAL_WAITERS=[],LOGOUT_HOOKS=[];
+let EXTERNAL_ACTIVE='';
+function registerExternalView(name,def){
+  EXTERNAL_VIEWS[name]=def;
+  const waiters=EXTERNAL_WAITERS.splice(0);
+  waiters.forEach(fn=>fn());
+}
+function waitExternalView(name,ms=3000){
+  return new Promise(resolve=>{
+    if(EXTERNAL_VIEWS[name])return resolve(true);
+    let settled=false;
+    const finish=ok=>{if(settled)return;settled=true;resolve(ok)};
+    EXTERNAL_WAITERS.push(()=>finish(true));
+    setTimeout(()=>finish(!!EXTERNAL_VIEWS[name]),ms);
+  });
+}
+function enterExternalView(name,fromHash=false){
+  if(EXTERNAL_ACTIVE&&EXTERNAL_ACTIVE!==name)leaveExternalView();
+  const def=EXTERNAL_VIEWS[name];if(!def)return;
+  EXTERNAL_ACTIVE=name;VIEW=name;
+  document.querySelectorAll('.nav button').forEach(b=>b.classList.toggle('on',b.dataset.view===name));
+  document.querySelectorAll('.view').forEach(v=>v.classList.toggle('on',v.id==='view-'+name));
+  if(def.title)$('#pageTitle').textContent=def.title;
+  if(def.sub)$('#pageSub').textContent=def.sub;
+  if(!fromHash&&location.hash!=='#'+name)history.replaceState(null,'','#'+name);
+  Promise.resolve().then(()=>def.enter&&def.enter()).catch(e=>toast(e&&e.message?e.message:String(e),'bad'));
+}
+function leaveExternalView(){
+  const name=EXTERNAL_ACTIVE;
+  if(!name)return;
+  EXTERNAL_ACTIVE='';
+  const def=EXTERNAL_VIEWS[name];
+  if(def&&typeof def.leave==='function'){try{def.leave()}catch(e){}}
+}
+// 窄桥：只暴露公共请求/提示与路由注册，不暴露 TOKEN。
+window.RF4Admin=Object.freeze({
+  api:(path,opt)=>api(path,opt),
+  toast:(msg,type)=>toast(msg,type),
+  registerExternalView:(name,def)=>registerExternalView(name,def),
+  onLogout:(fn)=>{if(typeof fn==='function')LOGOUT_HOOKS.push(fn)},
+});
 async function boot(){
   try{
     const me=await api('/api/me');$('#who').textContent=me.username;$('#login').style.display='none';$('#app').style.display='grid';
     renderUpdate(me.update);
-    const initial=location.hash.slice(1);go(titles[initial]?initial:'dashboard',true);if(!REFRESH_TIMER)REFRESH_TIMER=setInterval(()=>{if(!TOKEN)return;if(VIEW==='dashboard')loadDashboard(false).catch(()=>{});else if(VIEW==='players')loadPlayers(true).catch(()=>{})},8000);
+    const initial=location.hash.slice(1);
+    let initialView=titles[initial]?initial:'dashboard';
+    if(initial==='ai'&&!titles[initial]){
+      await waitExternalView(initial);
+      initialView=EXTERNAL_VIEWS[initial]?initial:'dashboard';
+    }
+    go(initialView,true);if(!REFRESH_TIMER)REFRESH_TIMER=setInterval(()=>{if(!TOKEN)return;if(VIEW==='dashboard')loadDashboard(false).catch(()=>{});else if(VIEW==='players')loadPlayers(true).catch(()=>{})},8000);
   }catch(e){logout()}
 }
 const titles={dashboard:['总览','服务器正常吗 · 谁在玩 · 最近改了什么'],players:['玩家管理','档案 · 资产 · 背包 · 护鱼网 · 技能'],stores:['商店与库存','覆盖货架价格与库存，即时生效'],fish:['钓场与鱼口','玩法开关 · 各水域出什么鱼 · 咬钩快慢'],hooks:['钩子手感','真实型号 · 入口容量 · 咬口概率'],bait:['鱼饵偏好','每种鱼爱吃的饵料：规则表条目 + 饵效证据'],mail:['邮件','给玩家发消息和物品附件'],params:['游戏参数','玩法手感与经验结算倍率，随时可调回默认'],audit:['审计日志','后台每次操作的留痕'],release:['发布说明','发布包内的版本更新 · 修复内容'],about:['关于','项目说明 · README.md']};
 function go(name,fromHash=false){
+  if(EXTERNAL_VIEWS[name]){enterExternalView(name,fromHash);return}
+  leaveExternalView();
   if(!titles[name])name='dashboard';
   VIEW=name;document.querySelectorAll('.nav button').forEach(b=>b.classList.toggle('on',b.dataset.view===name));
   document.querySelectorAll('.view').forEach(v=>v.classList.toggle('on',v.id==='view-'+name));
@@ -355,6 +414,10 @@ function go(name,fromHash=false){
 }
 window.addEventListener('hashchange',()=>go(location.hash.slice(1),true));
 function refreshCurrent(){
+  if(EXTERNAL_VIEWS[VIEW]){
+    Promise.resolve().then(()=>EXTERNAL_VIEWS[VIEW].refresh&&EXTERNAL_VIEWS[VIEW].refresh()).catch(e=>toast(e&&e.message?e.message:String(e),'bad'));
+    return;
+  }
   const jobs={dashboard:loadDashboard,players:()=>loadPlayers(false),stores:loadStores,fish:loadFishAreas,hooks:loadHookProfiles,bait:loadBaitPrefs,mail:()=>{},params:loadTunables,audit:loadAudit,release:loadReleaseNotes,about:loadAbout};
   (jobs[VIEW]||(()=>{}))().catch(e=>toast(e.message,'bad'));
 }
@@ -2938,5 +3001,6 @@ if(TOKEN)boot();else logout();
   });
 })();
 </script>
+<script type="module" src="ai/ai.js"></script>
 </body>
 </html>

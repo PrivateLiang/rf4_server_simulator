@@ -82,6 +82,14 @@ func hSocialUserCard(ctx *Ctx) ([]byte, bool) {
 		}
 		return encodeSocialTree(ctx, outer)
 	}
+	// AI 联系人：后台已接入的 Agent 单独一条分支，不影响上面的原有助手。
+	if a, ok := ctx.Sess.Srv.aiAgentByContactUID(ctx.Sess.pushCtx(), uid); ok {
+		outer, err := bytesWrappedObject(virtualContactCard(uid, a.Display), ctx.Sess.Table())
+		if err != nil {
+			return nil, false
+		}
+		return encodeSocialTree(ctx, outer)
+	}
 	var p *store.Profile
 	names := ""
 	level := int64(1)

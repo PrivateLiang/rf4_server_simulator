@@ -248,7 +248,11 @@ func (d *DB) AdminVerify(ctx context.Context, username, password string) (bool, 
 
 // AuditLogWrite 记操作审计。
 func (d *DB) AuditLogWrite(ctx context.Context, admin, action, target, detail string) error {
-	_, err := d.SQL.ExecContext(ctx, `
+	return writeAuditLog(ctx, d.SQL, admin, action, target, detail)
+}
+
+func writeAuditLog(ctx context.Context, q AIQueryer, admin, action, target, detail string) error {
+	_, err := q.ExecContext(ctx, `
 		INSERT INTO audit_log(admin, action, target, detail, ts) VALUES(?,?,?,?,?)`,
 		admin, action, target, detail, float64(time.Now().Unix()))
 	return err

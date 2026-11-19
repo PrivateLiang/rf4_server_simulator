@@ -112,6 +112,7 @@ func main() {
 	// 管理指令订阅（共享 SQLite 队列）+ 在线会话统计键（共享 KV）
 	srvStop := make(chan struct{})
 	srv.StartAdminSubscriber(db, srvStop)
+	srv.StartAIFishing(db, srvStop)
 	go func() {
 		t := time.NewTicker(5 * time.Second)
 		defer t.Stop()

@@ -55,7 +55,7 @@ button{font:inherit;color:var(--text);cursor:pointer}.topbar{height:66px;display
     <div class="hero">
       <div>
         <h1>本地服务运行控制</h1>
-        <p>启动、停止与查看 gameserver、gateway 的实时状态和日志；管理后台已内嵌在统一入口中。</p>
+        <p>启动、停止与查看 gameserver、gateway、aibridge 的实时状态和日志；管理后台已内嵌在统一入口中。</p>
       </div>
       <div class="actions">
         <button class="btn pri" onclick="act('start','')">启动全部</button>
@@ -159,8 +159,11 @@ function renderStatus(st){
   renderGameConfig(st);
   renderHosts(st);
   const procs = st.procs || [];
+  const ai = st.ai || {};
   const running = procs.filter(p => p.state === "running").length;
-  setHealth(running, procs.length || 2);
+  const aiTotal = ai.state === "disabled" ? 0 : 1;
+  const aiRunning = ai.state === "running" ? 1 : 0;
+  setHealth(running + aiRunning, (procs.length || 2) + aiTotal);
   const err = document.getElementById("lastError");
   if(st.last_error){ err.hidden = false; err.textContent = "最近错误：" + st.last_error; }
   else err.hidden = true;
@@ -178,7 +181,7 @@ function renderStatus(st){
       <div class="build">自报版本 <b>${buildText(p)}</b></div>
       ${p.exe_changed ? `<div class="card-stale">⚠ 磁盘上的 ${p.name}.exe 已被替换，当前运行的仍是启动时那份；重启后才会切到新构建。</div>` : ""}
       <div class="btns"><button onclick="act('start','${p.name}')">启动</button><button onclick="act('stop','${p.name}')">停止</button><button onclick="act('restart','${p.name}')">重启</button></div></div>`;
-  }).join("") + hostsCard();
+  }).join("") + aiCard(st.ai) + hostsCard();
   renderHosts(st);
 }
 
@@ -196,6 +199,26 @@ function buildText(p){
 function shortSource(path){
   const parts = String(path).split(/[\\/]+/).filter(Boolean);
   return parts.slice(-2).join("/") || String(path);
+}
+
+// aibridge 是可选进程：进程状态 + /healthz，操作走 /api/{start|stop|restart}?name=aibridge。
+function aiCard(ai){
+  if(!ai) return "";
+  const state = ai.state || "stopped";
+  const label = {running:"运行中",stopped:"已停止",disabled:"未启用"}[state] || state;
+  const cls = state === "running" ? "running" : "stopped";
+  const dis = state === "disabled" ? "disabled" : "";
+  let meta;
+  if(state === "disabled"){
+    meta = "ai.enabled=false；修改 config.yaml 后重启 launcher 可启用";
+  } else if(state === "running"){
+    meta = `PID ${ai.pid || "-"} · 重启 ${ai.restarts || 0} 次 · 运行 ${Math.floor(ai.uptime_s || 0)}s · 健康 ${ai.healthy ? "正常" : "未响应"}`;
+  } else {
+    meta = `重启 ${ai.restarts || 0} 次${ai.last_error ? " · " + ai.last_error : ""}`;
+  }
+  return `<div class="card"><div class="card-head"><b>aibridge (AI 助手)</b><span class="state ${cls}">${label}</span></div>
+    <div class="meta">${meta}</div>
+    <div class="btns"><button ${dis} onclick="act('start','aibridge')">启动</button><button ${dis} onclick="act('stop','aibridge')">停止</button><button ${dis} onclick="act('restart','aibridge')">重启</button></div></div>`;
 }
 
 function hostsCard(){

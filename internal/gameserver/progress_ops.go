@@ -419,6 +419,8 @@ func (s *Server) fishingEndSettle(ctx *Ctx) ([]byte, bool) {
 		// 奖杯/蓝冠与破纪录经聊天频道播报；普通鱼由结算卡展示。
 		if !res.replayed {
 			s.notifyFishLanded(ctx.Sess, pending, res.isRecord)
+			// 玩家自己上星/上蓝时，同频道的 Agent 可能会接一句。
+			s.maybeAIPlayerCatch(cctx, uid, pending)
 		}
 	}
 

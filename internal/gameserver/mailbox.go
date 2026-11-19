@@ -196,6 +196,9 @@ func hMailSendMessage(ctx *Ctx) ([]byte, bool) {
 	if toUID == gearAssistantUID {
 		return srv.receiveGearAssistant(ctx, text)
 	}
+	if a, ok := srv.aiAgentByContactUID(ctx.Sess.pushCtx(), toUID); ok {
+		return srv.receiveAIChat(ctx, toUID, a.Key, text)
+	}
 	if toUID > 0 && toUID != ctx.Sess.Userid {
 		cctx := ctx.Sess.pushCtx()
 		tx, err := beginEconomyTx(cctx, srv.DB)
@@ -889,6 +892,8 @@ func (s *Server) StartAdminSubscriber(db *store.DB, stop <-chan struct{}) {
 					}
 					s.execAdminCmd(&cmd)
 				}
+				s.pollAIResults(ctx, db)
+				s.pollAIToolJobs(ctx, db)
 			}
 		}
 	}()

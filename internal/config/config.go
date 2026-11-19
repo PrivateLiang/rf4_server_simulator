@@ -7,6 +7,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -23,6 +24,26 @@ type Config struct {
 	Game     Game     `yaml:"game"`
 	Admin    Admin    `yaml:"admin"`
 	Launcher Launcher `yaml:"launcher"`
+	AI       AI       `yaml:"ai"`
+}
+
+// AI 是 aibridge 进程的本地配置。
+// 出网、联网搜索、紧急停止属于运行期开关，统一由后台写入 ai_setting，
+// 这里只保留进程级参数，避免配置文件和数据库两套真值。
+type AI struct {
+	Enabled           bool    `yaml:"enabled"`
+	ObsAddr           string  `yaml:"obs_addr"`
+	PollIntervalMS    int     `yaml:"poll_interval_ms"`
+	RequestTimeoutSec float64 `yaml:"request_timeout_sec"`
+	MaxConcurrent     int     `yaml:"max_concurrent"`
+	MasterKeyFile     string  `yaml:"master_key_file"`
+
+	// EgressAllowedHosts 是旧版部署级出口主机名单，仅为兼容旧配置继续解析。
+	//
+	// V2（DEV-104「只留急停」）不再用它做启动或发送前提：名单为空、条目非法
+	// 都不影响启动与外发；传输层仍保留 HTTPS、解析地址、重定向与证书保护。
+	// 后台只把它当部署记录展示（配了几条），不回显主机清单。
+	EgressAllowedHosts []string `yaml:"egress_allowed_hosts"`
 }
 
 // SQLite 本地单文件数据库（多进程共享，WAL 并发）。
@@ -91,6 +112,11 @@ type Admin struct {
 	ObsAddr   string `yaml:"obs_addr"`
 	Username  string `yaml:"username"` // 管理员账号（以配置为准，启动时同步）
 	Password  string `yaml:"password"` // 管理员密码（明文进 yaml，注意文件权限）
+
+	// AIEgressAllowedHosts 不在 admin 段单独配置：Load 会把
+	// ai.egress_allowed_hosts 原样复制过来，让后台「测试连接」进程读到与
+	// aibridge 相同的部署白名单；两处各配一份会漂移。进程只读，不回写 YAML。
+	AIEgressAllowedHosts []string `yaml:"-"`
 }
 
 // Launcher 本地启动器设置。
@@ -113,10 +139,38 @@ func Load(path string) (*Config, error) {
 		}
 	}
 	cfg.applyEnvOverrides()
+	// 主密钥路径按「配置文件所在目录」解析：相对 CWD 会让同一份配置从不同目录
+	// 启动时指向不同的主密钥文件，已有密文将无法解密。
+	cfg.resolveAISecretPaths(path)
+	// 后台进程与 aibridge 分属两个进程、各自只读自己那部分配置；出口白名单
+	// 属于同一份部署策略，这里在加载时复制给后台，避免两处配置漂移。
+	cfg.Admin.AIEgressAllowedHosts = append([]string(nil), cfg.AI.EgressAllowedHosts...)
 	if err := cfg.validate(); err != nil {
 		return nil, err
 	}
 	return cfg, nil
+}
+
+// resolveAISecretPaths 把 AI 主密钥路径解析成稳定路径：
+// 绝对路径只做 Clean；相对路径相对「配置文件所在目录」，不是相对进程 CWD。
+// 没有配置文件（默认值/测试）时保持相对路径，仅用于本地开发默认值。
+func (c *Config) resolveAISecretPaths(configPath string) {
+	raw := strings.TrimSpace(c.AI.MasterKeyFile)
+	if raw == "" {
+		return
+	}
+	if filepath.IsAbs(raw) {
+		c.AI.MasterKeyFile = filepath.Clean(raw)
+		return
+	}
+	if strings.TrimSpace(configPath) == "" {
+		return
+	}
+	absConfig, err := filepath.Abs(configPath)
+	if err != nil {
+		return
+	}
+	c.AI.MasterKeyFile = filepath.Join(filepath.Dir(absConfig), raw)
 }
 
 func defaults() *Config {
@@ -162,6 +216,14 @@ func defaults() *Config {
 			ObsAddr:   ":9503",
 			Username:  "admin",
 			Password:  "admin123",
+		},
+		AI: AI{
+			Enabled:           true, // 默认拉起；未配 Key 时只走模板降级，不产生出网请求
+			ObsAddr:           "127.0.0.1:9504",
+			PollIntervalMS:    500,
+			RequestTimeoutSec: 20,
+			MaxConcurrent:     2,
+			MasterKeyFile:     "data/ai_master.key",
 		},
 	}
 }
@@ -219,5 +281,10 @@ func (c *Config) validate() error {
 	if c.Gateway.AdvertisePort == 0 {
 		return fmt.Errorf("gateway.advertise_port 未配置")
 	}
+	if c.AI.Enabled && strings.TrimSpace(c.AI.MasterKeyFile) == "" {
+		return fmt.Errorf("ai.master_key_file 未配置")
+	}
+	// 旧出口名单仅作兼容解析，不再校验、也不再作为启动前提（V2 只留急停）。
+	// 条目写法错误不影响启动与外发；后台只显示「配了几条」。
 	return nil
 }

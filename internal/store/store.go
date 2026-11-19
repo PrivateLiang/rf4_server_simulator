@@ -256,6 +256,16 @@ var renumberedColumnMigrations = map[string]struct {
 	"migrations/00067_fish_zone_circle.sql":  {table: "fish_zone", columns: []string{"cx", "cz", "radius"}},
 	"migrations/00068_catch_log_hook.sql":    {table: "catch_log", columns: []string{"hook"}, remains: `CREATE INDEX IF NOT EXISTS idx_catch_log_fish_hook ON catch_log(fish_key, hook);`},
 	"migrations/00069_fish_zone_sea_set.sql": {table: "fish_zone", columns: []string{"sea_zones_json"}},
+	// AI 00904 由旧编号 00080 让号而来：旧库已建过 fishing_talk_enabled 时只补六项
+	// setting 种子，不重跑 ALTER TABLE ADD COLUMN。单列迁移下「全部存在」与「列存在」
+	// 等价，不存在部分存在分支。
+	"migrations/00904_ai_fishing_talk.sql": {table: "ai_agent", columns: []string{"fishing_talk_enabled"}, remains: `INSERT OR IGNORE INTO ai_setting(key, value, updated_ts) VALUES
+    ('ai_fishing_talk_enabled', '0', 0),
+    ('ai_fishing_talk_super_chance', '1', 0),
+    ('ai_fishing_talk_star_chance', '0.9', 0),
+    ('ai_fishing_talk_near_chance', '0.35', 0),
+    ('ai_fishing_talk_miss_chance', '0.25', 0),
+    ('ai_fishing_roundtable_chance', '0.5', 0);`},
 }
 
 // catchTackleCatBackfillSQL 是 00055 迁移里除 ALTER TABLE 之外的部分（回填 + 索引）。

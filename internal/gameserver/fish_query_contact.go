@@ -29,6 +29,14 @@ func hSocialMembers(ctx *Ctx) ([]byte, bool) {
 	}
 	s.mu.Unlock()
 	sort.Slice(ids[2:], func(i, j int) bool { return ids[i+2] < ids[j+2] })
+	// AI 接入：只追加后台已「接入游戏」的 Agent。
+	// 默认零接入时，这份列表与改造前完全一致。
+	for _, a := range s.aiJoinedAgents(ctx.Sess.pushCtx()) {
+		if !seen[a.ContactUID] {
+			ids = append(ids, uint32(a.ContactUID))
+			seen[a.ContactUID] = true
+		}
+	}
 	return encodeSocialTree(ctx, proto.U32Arr(ids))
 }
 

@@ -211,6 +211,7 @@ func main() {
 			app.log.Error("进程启动失败: " + err.Error())
 			return
 		}
+		app.startAIBridge()
 		if app.cfg.Launcher.HostsSwitch {
 			if err := hostsSetLocal(hostsFilePath(), loginDomains(app.cfg)); err != nil {
 				app.log.Warn("hosts 自动切换失败（请以管理员身份运行 launcher）: " + err.Error() +
@@ -223,6 +224,7 @@ func main() {
 
 	// ---- 托盘常驻 ----
 	systray.Run(app.onTrayReady, func() {
+		app.stopAIBridge()
 		app.sup.StopAll()
 		if app.cfg.Launcher.HostsSwitch {
 			if err := hostsRestore(hostsFilePath()); err != nil {
@@ -272,19 +274,21 @@ func (a *app) onTrayReady() {
 	}()
 	go func() {
 		for range mItemStart.ClickedCh {
-			go func() { _ = a.sup.StartAll() }()
+			go func() { _ = a.sup.StartAll(); a.startAIBridge() }()
 		}
 	}()
 	go func() {
 		for range mItemStop.ClickedCh {
+			a.stopAIBridge()
 			a.sup.StopAll()
 		}
 	}()
 	go func() {
 		for range mItemRestart.ClickedCh {
+			a.stopAIBridge()
 			a.sup.StopAll()
 			time.Sleep(500 * time.Millisecond)
-			go func() { _ = a.sup.StartAll() }()
+			go func() { _ = a.sup.StartAll(); a.startAIBridge() }()
 		}
 	}()
 	go func() {
@@ -363,6 +367,7 @@ func (a *app) handleStatus(w http.ResponseWriter, _ *http.Request) {
 	}
 	writeJSON(w, map[string]any{
 		"procs":           procs,
+		"ai":              a.aiBridgeStatus(),
 		"last_error":      lastErr,
 		"launcher_build":  launcherBuild(),
 		"admin":           "/admin/",
@@ -425,6 +430,23 @@ func (a *app) actionHandler(action string) http.HandlerFunc {
 			return
 		}
 		name := r.URL.Query().Get("name")
+		if name == "aibridge" {
+			switch action {
+			case "start":
+				go a.startAIBridge()
+			case "stop":
+				a.stopAIBridge()
+			case "restart":
+				a.stopAIBridge()
+				time.Sleep(300 * time.Millisecond)
+				go a.startAIBridge()
+			default:
+				httpError(w, "未知操作")
+				return
+			}
+			w.WriteHeader(204)
+			return
+		}
 		var err error
 		switch action {
 		case "start":
@@ -451,6 +473,16 @@ func (a *app) actionHandler(action string) http.HandlerFunc {
 		if err != nil {
 			httpError(w, err.Error())
 			return
+		}
+		// aibridge 不在 supervisor 固定进程列表里；只有「全部启停/重启」
+		// 才联动它，单启停 gateway/gameserver 不应顺带拉起或杀掉 AI。
+		if name == "" {
+			if action == "stop" || action == "restart" {
+				a.stopAIBridge()
+			}
+			if action == "start" || action == "restart" {
+				go a.startAIBridge()
+			}
 		}
 		w.WriteHeader(204)
 	}
@@ -486,6 +518,7 @@ func (a *app) initAdmin(ctx context.Context) error {
 		a.setAdminError(err)
 		return err
 	}
+	admin.ConfigureAI(a.cfg.AI.MasterKeyFile, a.cfg.AI.ObsAddr)
 	srv := admin.NewServer(a.cfg.Admin, db, adminLogger{a.log}, admin.WebFS())
 	// 更新检测可能先于管理后台就绪已有结论，补推一次。
 	var update *updatecheck.Result

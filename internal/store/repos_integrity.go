@@ -43,6 +43,15 @@ var RuntimeTables = []string{
 	// rf4records 官方周纪录捕获表：tools/fetch_rf4records.py（外部证据管道）写入，
 	// 运营数据，非静态资料也非玩家存档。
 	"rf4records_catch",
+	"ai_task", "ai_result", "ai_agent", "ai_provider", "ai_model", "ai_secret",
+	"ai_channel", "ai_channel_agent", "ai_setting", "ai_tool_job",
+	"ai_memory", "ai_actor_state", "ai_catch", "ai_map_agent",
+	// 运行态单写者命令与每 Agent 代次/版本（T-020）：命令是可审计的意图队列，
+	// control 是 GS 独占写的单调真源，两者都属于运行时表。
+	"ai_runtime_command", "ai_runtime_control",
+	// T-108 / DEV-121 A：两张从属于 ai_task / ai_result 的凭据表。
+	// 只是事件准入与实际表达版本的证据，不参与玩家存档或静态资料。
+	"ai_task_evidence", "ai_result_expression",
 }
 
 // TableOwnership 返回每张用户表的唯一归属。静态、玩家、运行时三组必须互不相交。

@@ -122,6 +122,34 @@ func NewServer(cfg config.Admin, db *store.DB, log logger, webFS fs.FS) *Server 
 	mux.HandleFunc("POST /api/fish/zones/delete", auth(s.handleFishZoneDelete))
 	mux.HandleFunc("POST /api/mail/send", auth(s.handleMailSend))
 	mux.HandleFunc("GET /api/audit", auth(s.handleAudit))
+	mux.HandleFunc("GET /api/ai/status", auth(s.handleAIStatus))
+	mux.HandleFunc("GET /api/ai/tools", auth(s.handleAITools))
+	mux.HandleFunc("GET /api/ai/capabilities", auth(s.handleAICapabilities))
+	mux.HandleFunc("POST /api/ai/capabilities", auth(s.handleAICapabilitiesSave))
+	// T-107：四维性格读取/保存与评分草稿。评分只回草稿，落库只经显式保存。
+	mux.HandleFunc("GET /api/ai/personality", auth(s.handleAIPersonalityGet))
+	mux.HandleFunc("POST /api/ai/personality", auth(s.handleAIPersonalitySave))
+	mux.HandleFunc("POST /api/ai/personality/score", auth(s.handleAIPersonalityScore))
+	mux.HandleFunc("POST /api/ai/config", auth(s.handleAIConfigSave))
+	mux.HandleFunc("POST /api/ai/settings", auth(s.handleAISettingsSave))
+	mux.HandleFunc("POST /api/ai/consent/confirm", auth(s.handleAIConsentConfirm))
+	mux.HandleFunc("POST /api/ai/consent/revoke", auth(s.handleAIConsentRevoke))
+	mux.HandleFunc("POST /api/ai/agent", auth(s.handleAIAgentSave))
+	mux.HandleFunc("GET /api/ai/channels", auth(s.handleAIChannels))
+	mux.HandleFunc("POST /api/ai/channel", auth(s.handleAIChannelSave))
+	mux.HandleFunc("POST /api/ai/test", auth(s.handleAITest))
+	mux.HandleFunc("POST /api/ai/agent/create", auth(s.handleAIAgentCreate))
+	mux.HandleFunc("POST /api/ai/agent/join", auth(s.handleAIAgentJoin))
+	mux.HandleFunc("POST /api/ai/agent/update", auth(s.handleAIAgentUpdate))
+	mux.HandleFunc("POST /api/ai/agent/delete", auth(s.handleAIAgentDelete))
+	mux.HandleFunc("POST /api/ai/agent/actor", auth(s.handleAIAgentActor))
+	mux.HandleFunc("POST /api/ai/agent/fishing-talk", auth(s.handleAIAgentFishingTalk))
+	mux.HandleFunc("POST /api/ai/agent/behavior", auth(s.handleAIAgentBehavior))
+	mux.HandleFunc("POST /api/ai/memory/clear", auth(s.handleAIMemoryClear))
+	mux.HandleFunc("GET /api/ai/commands/{id}", auth(s.handleAICommandGet))
+	// T-027 测试脚手架：v2 删除（见 specs/changes/ai-fishing-talk-test-hook）
+	mux.HandleFunc("POST /api/ai/test/fishing-talk", auth(s.handleAIFishingTalkTest))
+	mux.HandleFunc("GET /api/ai/test/fishing-talk", auth(s.handleAIFishingTalkTestGet))
 	mux.HandleFunc("GET /api/about", auth(s.handleAbout))
 	mux.HandleFunc("GET /api/release-notes", auth(s.handleReleaseNotes))
 
@@ -131,7 +159,7 @@ func NewServer(cfg config.Admin, db *store.DB, log logger, webFS fs.FS) *Server 
 	// 物品与鱼种图标同理由 ref/ 运行时加载（见 item_icons.go）。
 	mux.Handle("GET /icons/", http.HandlerFunc(s.handleIcons))
 	if webFS != nil {
-		mux.Handle("/", http.FileServer(http.FS(webFS)))
+		mux.Handle("/", WebHandler(webFS))
 	}
 	s.mux = mux
 	s.srv = &http.Server{Addr: cfg.HTTPAddr, Handler: mux, ReadHeaderTimeout: 10 * time.Second}

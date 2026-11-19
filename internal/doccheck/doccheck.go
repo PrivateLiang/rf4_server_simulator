@@ -1,6 +1,7 @@
-// Package doccheck 校验仓库的文档契约：文档索引、spec 状态枚举、相对链接与文档路径引用。
+// Package doccheck 校验仓库的文档契约：文档索引、spec 状态枚举、相对链接、文档路径引用与 AI spec 正文引用。
 //
-// 规则与验收口径见 specs/changes/doc-contract-check/spec.md。
+// 规则与验收口径见 specs/changes/doc-contract-check/spec.md 与
+// specs/changes/ai-spec-reference-check/spec.md。
 // 本包只读文件系统，不依赖网络、不依赖 git，可直接在 CI 与本地钩子里跑。
 package doccheck
 
@@ -100,6 +101,12 @@ func Run(root string) (Report, error) {
 	}
 	issues = append(issues, specIssues...)
 	st.Specs = specs
+
+	aiSpecIssues, err := checkAISpecRefs(root)
+	if err != nil {
+		return report, err
+	}
+	issues = append(issues, aiSpecIssues...)
 
 	for _, rel := range files {
 		path := filepath.Join(root, filepath.FromSlash(rel))

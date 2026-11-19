@@ -50,7 +50,7 @@ mkdir -p "${STAGE}/bin" "${STAGE}/certs"
 
 echo "Building ${VERSION} from ${COMMIT_SHA}"
 LDFLAGS="-s -w -X 'rf4server/internal/buildinfo.Version=${VERSION}' -X 'rf4server/internal/buildinfo.BuildTs=${BUILD_NUM_TS}' -X 'rf4server/internal/buildinfo.GitCommit=${SHORT_SHA}' -X 'rf4server/internal/buildinfo.SourceDir=${ROOT}'"
-for command in gateway gameserver seed; do
+for command in gateway gameserver seed aibridge; do
   GOOS=windows GOARCH=amd64 go build -trimpath -ldflags "${LDFLAGS}" \
     -o "${STAGE}/bin/${command}.exe" "./cmd/${command}"
 done

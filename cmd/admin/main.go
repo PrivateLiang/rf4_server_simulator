@@ -40,6 +40,7 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
+	admin.ConfigureAI(cfg.AI.MasterKeyFile, cfg.AI.ObsAddr)
 	obs := metrics.NewServer(cfg.Admin.ObsAddr, "admin")
 	obsErrCh := obs.Start()
 

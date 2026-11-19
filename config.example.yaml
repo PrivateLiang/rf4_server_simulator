@@ -58,6 +58,34 @@ admin:
   username: "admin"                           # 管理员用户名。
   password: "replace-with-strong-password"   # 管理员密码；每次启动 admin 时应用。
 
+ai:
+  enabled: true                        # 默认由 launcher 拉起；未填 Key 时只走模板降级，不出网
+  obs_addr: "127.0.0.1:9504"           # aibridge 健康检查与队列状态，仅本机
+  poll_interval_ms: 500                # ai_task 轮询间隔
+  request_timeout_sec: 20              # 单次模型请求超时
+  max_concurrent: 2                    # 全局并发上限
+  # API Key 加密主密钥（AES-256-GCM，32 字节）。相对路径按「本配置文件所在目录」
+  # 解析，不是进程 CWD；缺失时不自动生成：空安装可先运行
+  # `aibridge -init-key -config config.yaml` 显式创建后退出（也可第一次在后台保存 Key，
+  # 两者共用同一判定）；只有「主密钥缺失 + ai_secret 无密文 + 无 ai_credentials.json
+  # + 凭据版本目录里没有对象/准备件」同时成立才会创建，不打印/记录任何 Key 材料。
+  # 已有密文而主密钥缺失/损坏时锁定并保留文件。
+  master_key_file: "data/ai_master.key"
+  # API Key 密文不入库：V2 每次保存/迁移都会在 master_key_file 同目录的
+  # ai_credentials.d/ 下生成一个不可变密文对象（随机引用命名，创建后不改写）。
+  # 安装后会先 fsync 对象与目录（首次创建时含父目录）才提交发布；不支持目录
+  # fsync 的平台（如 Windows）会拒绝保存并保留原配置，详见 docs/deploy.md。
+  # 旧 ai_credentials.json 仍只读兼容（升级时迁移来源），不再写入。
+  # 主密钥与密文对象/旧文件分开备份、分别保护。旧库 ai_secret 只读兼容，不删。
+  # 旧版部署出口主机名单：仅为兼容旧配置继续解析，V2 不再用它做启动或发送前提
+  # （只留紧急停止；后台只把它当部署记录展示）。条目写法错误也不影响启动。
+  egress_allowed_hosts: []
+  # 例（仅作部署记录，不参与放行）：
+  # egress_allowed_hosts:
+  #   - api.deepseek.com
+  #   - https://api.openai.com:443
+  # 联网搜索 / 紧急停止在管理后台「AI 助手」页配置，写入 ai_setting。
+
 # 支持的环境变量覆盖：
 # RF4_LOG_LEVEL、RF4_LOG_FORMAT、RF4_SQLITE_PATH、RF4_SQLITE_STATIC_PATH、
 # RF4_GATEWAY_LOGIN_ADDR、RF4_GATEWAY_LOGIN_COMPAT_ADDR、RF4_GATEWAY_REALTIME_ADDR、RF4_GATEWAY_ADVERTISE_HOST、

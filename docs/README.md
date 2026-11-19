@@ -98,6 +98,7 @@
 - [商店扣款前校验物品可下发性](../specs/changes/store-goods-wire-preflight/spec.md)：吸引成分购买可见性与异常商品拒购边界。
 - [领域文档约定](agents/domain.md)：文档地图、证据等级、对账表。
 - [ADR 0001](adr/0001-engineering-constraints.md)：为什么采用按风险分级的约束体系。
+- [ADR 0002](adr/0002-ai-migration-numbering.md)：为什么 AI 迁移使用临时号段 00900+。
 
 长期能力契约在 `specs/capabilities/`，一域一份（13 份）：协议契约、结算与终态、鱼口饵料与派鱼、
 装备载荷与断损、钓组装配、管理端与热更参数、经济与发放、玩家状态条、成就、游戏内查鱼、
