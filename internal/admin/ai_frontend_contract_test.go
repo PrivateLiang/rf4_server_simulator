@@ -425,6 +425,11 @@ func TestAIFrontendCSSBoundaryNegatives(t *testing.T) {
 // readEmbeddedAsset 读取实际 embed 资源，而不是磁盘上的单页。
 func readEmbeddedAsset(t *testing.T, name string) string {
 	t.Helper()
+	// 过渡期：旧单页已改名为 legacy.html（新后台在 web/app/），旧 AI 模块仍挂在旧单页上。
+	// 这里的契约继续守护旧单页；新后台的同类安全断言见 app_frontend_contract_test.go。
+	if name == "index.html" {
+		name = "legacy.html"
+	}
 	raw, err := fs.ReadFile(WebFS(), name)
 	if err != nil {
 		t.Fatalf("读取内嵌资源 %s: %v", name, err)

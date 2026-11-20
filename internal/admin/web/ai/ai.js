@@ -2805,7 +2805,7 @@ function switchPersonalityCancel() {
 if (host && typeof host.api === 'function' && typeof host.registerExternalView === 'function') {
   host.registerExternalView('ai', {
     title: 'AI 助手',
-    sub: '总览 · 连接 · 角色与订阅 · 说话与上下文 · AI 虚拟钓鱼 · 性格与交互',
+    sub: '让 AI 角色在游戏里陪玩家钓鱼、聊天',
     enter: enter,
     refresh: refresh,
     leave: leave,
