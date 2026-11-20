@@ -54,7 +54,7 @@ export default async function dashboard() {
     section({
       title: '最近的修改',
       actions: btn('全部记录', () => navigate('audit'), 'sm'),
-      body: audits.length ? h('div', { class: 'list' }, audits.map((e) => {
+      body: (audits || []).length ? h('div', { class: 'list' }, audits.map((e) => {
         const ts = e.TS ?? e.ts, target = (e.Target ?? e.target) || '';
         return h('div', { class: 'row', style: { padding: '9px 0', borderTop: '1px solid var(--line)', flexWrap: 'nowrap' } },
           h('span', { class: 'muted small nowrap', style: { width: '90px' }, title: timeText(ts), text: relTime(ts) }),
