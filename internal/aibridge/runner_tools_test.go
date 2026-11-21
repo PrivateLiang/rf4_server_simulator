@@ -60,18 +60,18 @@ func TestRunnerToolEnvFollowsCapabilities(t *testing.T) {
 		t.Fatalf("显式空仍给了工具: %+v", specs)
 	}
 
-	// 攻略 + 接受建议：八个读 + 一个写；写工具最后。
+	// 垂钓资料 + 接受建议：六个读 + 一个写；写工具最后。
 	if _, err := d.AISaveCapabilities(ctx, "companion", 1,
-		[]string{aiconfig.CapabilityGuideHelp, aiconfig.CapabilityAcceptTarget}, nil); err != nil {
+		[]string{aiconfig.CapabilityFishingKnowledge, aiconfig.CapabilityAcceptTarget}, nil); err != nil {
 		t.Fatal(err)
 	}
 	caps = r.capabilityState(ctx, agent)
 	specs := r.registry.Specs(caps.Tools())
-	if len(specs) != 9 || specs[8].Name != aiconfig.ToolActorTargetSuggest {
+	if len(specs) != 7 || specs[6].Name != aiconfig.ToolActorTargetSuggest || caps.ToolAllowed(aiconfig.ToolShopPrice) {
 		t.Fatalf("完整能力 specs = %+v", specs)
 	}
-	if specs[8].Kind != ToolKindWrite || specs[8].Route != ToolRouteGSWrite {
-		t.Fatalf("写工具路由 = %+v", specs[8])
+	if specs[6].Kind != ToolKindWrite || specs[6].Route != ToolRouteGSWrite {
+		t.Fatalf("写工具路由 = %+v", specs[6])
 	}
 	env = r.toolEnv(ctx, task, agent, caps, ctx)
 	if env.Generation != agent.Generation || env.Revision != agent.Revision {
@@ -90,7 +90,7 @@ func TestRunnerToolCallsRouteThroughDispatch(t *testing.T) {
 	k := bridgeStaticKnowledge(t)
 	r := &Runner{db: d, knowledge: k, registry: mustRegistry(t, k), log: bridgeTestLogger()}
 	if _, err := d.AISaveCapabilities(ctx, "companion", 0,
-		[]string{aiconfig.CapabilityGuideHelp, aiconfig.CapabilityAcceptTarget}, nil); err != nil {
+		[]string{aiconfig.CapabilityFishingKnowledge, aiconfig.CapabilityAcceptTarget}, nil); err != nil {
 		t.Fatal(err)
 	}
 	agent, err := d.AIAgentByKey(ctx, "companion")
@@ -195,7 +195,7 @@ func TestT104WriteReceiptFixedForToolAndLegacyPaths(t *testing.T) {
 		seedBridgeActor(t, d, "companion", "level_002_river", "测试河", "pike", "狗鱼",
 			float64(time.Now().Unix())+3600)
 		if _, err := d.AISaveCapabilities(ctx, "companion", 0,
-			[]string{aiconfig.CapabilityGuideHelp, aiconfig.CapabilityAcceptTarget}, nil); err != nil {
+			[]string{aiconfig.CapabilityFishingKnowledge, aiconfig.CapabilityAcceptTarget}, nil); err != nil {
 			t.Fatal(err)
 		}
 		task := t104DMTask(t, d, "换个目标吧")
@@ -231,7 +231,7 @@ func TestT104WriteReceiptFixedForToolAndLegacyPaths(t *testing.T) {
 		seedBridgeActor(t, d, "companion", "level_002_river", "测试河", "pike", "狗鱼",
 			float64(time.Now().Unix())+3600)
 		if _, err := d.AISaveCapabilities(ctx, "companion", 0,
-			[]string{aiconfig.CapabilityGuideHelp, aiconfig.CapabilityAcceptTarget}, nil); err != nil {
+			[]string{aiconfig.CapabilityFishingKnowledge, aiconfig.CapabilityAcceptTarget}, nil); err != nil {
 			t.Fatal(err)
 		}
 		task := t104DMTask(t, d, "鲈鱼今天口不错，我去钓鲈鱼")
@@ -276,7 +276,7 @@ func TestT104NextTaskReadsOwnTerminalStatesOnly(t *testing.T) {
 	d, master := newGateTestDB(t, vendor.URL)
 	ctx := context.Background()
 	st, err := d.AISaveCapabilities(ctx, "companion", 0,
-		[]string{aiconfig.CapabilityGuideHelp, aiconfig.CapabilityAcceptTarget}, nil)
+		[]string{aiconfig.CapabilityFishingKnowledge, aiconfig.CapabilityAcceptTarget}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -375,7 +375,7 @@ func TestT104NextTaskShowsRealGSApplyAndReject(t *testing.T) {
 	seedBridgeActor(t, d, "companion", "level_002_river", "测试河", "pike", "狗鱼",
 		float64(time.Now().Unix())+3600)
 	st, err := d.AISaveCapabilities(ctx, "companion", 0,
-		[]string{aiconfig.CapabilityGuideHelp, aiconfig.CapabilityAcceptTarget}, nil)
+		[]string{aiconfig.CapabilityFishingKnowledge, aiconfig.CapabilityAcceptTarget}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -530,13 +530,16 @@ func TestT104LocalRevocationStopsSameTaskDispatch(t *testing.T) {
 		`{"query":"鲈鱼"}`, "查不了")
 	d, master := newGateTestDB(t, revokeVendor.URL)
 	if _, err := d.AISaveCapabilities(ctx, "companion", 0,
-		[]string{aiconfig.CapabilityGuideHelp}, nil); err != nil {
+		[]string{aiconfig.CapabilityFishingKnowledge}, nil); err != nil {
 		t.Fatal(err)
 	}
 	task := t104DMTask(t, d, "鲈鱼在哪")
 	r := t104BridgeRunner(t, d, master, revokeVendor)
 	done := runTaskAsync(t, r, task)
-	<-started // 任务已开始：能力快照与预注入已经发生，模型请求在途
+	<-started // 模型请求在途，预取已经执行
+	if got := atomic.SwapInt32(&localCalls, 0); got != 1 {
+		t.Fatalf("首轮预取执行了 %d 次鱼种工具，期望 1 次", got)
+	}
 	if _, err := d.AISaveCapabilities(ctx, "companion", 1, []string{}, nil); err != nil {
 		t.Fatalf("撤权: %v", err)
 	}
@@ -565,7 +568,7 @@ func TestT104LocalRevocationStopsSameTaskDispatch(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := d.AISaveCapabilities(ctx, "companion", 2,
-		[]string{aiconfig.CapabilityGuideHelp}, nil); err != nil {
+		[]string{aiconfig.CapabilityFishingKnowledge}, nil); err != nil {
 		t.Fatal(err)
 	}
 	atomic.StoreInt32(&localCalls, 0)
@@ -579,6 +582,9 @@ func TestT104LocalRevocationStopsSameTaskDispatch(t *testing.T) {
 		_ = d.SQL.QueryRow(`SELECT status, reply_text, err FROM ai_result WHERE task_id=?`, task2.ID).
 			Scan(&status, &reply, &errText)
 		t.Fatalf("未发出模型请求: status=%q reply=%q err=%q", status, reply, errText)
+	}
+	if got := atomic.SwapInt32(&localCalls, 0); got != 1 {
+		t.Fatalf("对照预取执行了 %d 次鱼种工具，期望 1 次", got)
 	}
 	close(controlRelease)
 	<-done2

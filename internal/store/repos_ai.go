@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"math"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -1194,18 +1195,20 @@ func clearAIMemories(ctx context.Context, q AIQueryer, agentKey string) error {
 
 // AIChannelInfo 是后台频道下拉的一项。
 type AIChannelInfo struct {
-	Name   string
-	Label  string
-	Count  int
-	Agents []string
+	Name      string
+	Label     string
+	Count     int
+	Agents    []string
+	AgentKeys []string
 }
 
 // AIMapInfo 是后台地图级订阅下拉的一项。
 type AIMapInfo struct {
-	MapKey string
-	Label  string
-	Count  int
-	Agents []string
+	MapKey    string
+	Label     string
+	Count     int
+	Agents    []string
+	AgentKeys []string
 }
 
 // AIUpsertChannel 记录客户端实际用过的频道名（切频道时调用）。
@@ -1221,12 +1224,12 @@ func (d *DB) AIUpsertChannel(ctx context.Context, name string) error {
 // 频道来源 = ai_channel ∪ ai_channel_agent，兼容历史数据。
 func (d *DB) AIListChannels(ctx context.Context) ([]AIChannelInfo, error) {
 	rows, err := d.SQL.QueryContext(ctx, `
-		SELECT ch.name, COALESCE(c.label,''), ag.display
+		SELECT ch.name, COALESCE(c.label,''), ag.key, ag.display
 		FROM (SELECT name FROM ai_channel UNION SELECT channel FROM ai_channel_agent) ch
 		LEFT JOIN ai_channel c ON c.name=ch.name
 		LEFT JOIN ai_channel_agent a ON a.channel=ch.name AND a.enabled=1
 		LEFT JOIN ai_agent ag ON ag.id=a.agent_id AND ag.enabled=1 AND ag.deleted_ts=0
-		ORDER BY ch.name`)
+		ORDER BY ch.name, a.agent_id`)
 	if err != nil {
 		return nil, err
 	}
@@ -1235,8 +1238,8 @@ func (d *DB) AIListChannels(ctx context.Context) ([]AIChannelInfo, error) {
 	byName := map[string]*AIChannelInfo{}
 	for rows.Next() {
 		var name, label string
-		var display sql.NullString
-		if err := rows.Scan(&name, &label, &display); err != nil {
+		var key, display sql.NullString
+		if err := rows.Scan(&name, &label, &key, &display); err != nil {
 			return nil, err
 		}
 		info, ok := byName[name]
@@ -1244,6 +1247,9 @@ func (d *DB) AIListChannels(ctx context.Context) ([]AIChannelInfo, error) {
 			info = &AIChannelInfo{Name: name, Label: label}
 			byName[name] = info
 			order = append(order, name)
+		}
+		if key.Valid {
+			info.AgentKeys = append(info.AgentKeys, key.String)
 		}
 		if display.Valid && display.String != "" {
 			info.Agents = append(info.Agents, display.String)
@@ -1402,6 +1408,35 @@ func (d *DB) AISetting(ctx context.Context, key, def string) string {
 		return def
 	}
 	return v
+}
+
+func (d *DB) AIWebSearchSettings(ctx context.Context) (aiconfig.WebSearchSettings, error) {
+	var cfg aiconfig.WebSearchSettings
+	var enabled string
+	err := d.SQL.QueryRowContext(ctx, `SELECT
+		COALESCE((SELECT value FROM ai_setting WHERE key=?),''),
+		COALESCE((SELECT value FROM ai_setting WHERE key=?),''),
+		COALESCE((SELECT value FROM ai_setting WHERE key=?),'')`,
+		aiconfig.KeyWebSearchEnabled, aiconfig.KeySearchMode, aiconfig.KeySearchEndpoint).
+		Scan(&enabled, &cfg.Mode, &cfg.Endpoint)
+	cfg.Enabled = enabled == "1"
+	return cfg, err
+}
+
+// AIRecordNativeSearch keeps the latest confirmation across concurrent tasks.
+func (d *DB) AIRecordNativeSearch(ctx context.Context, evidence aiconfig.NativeSearchEvidence) error {
+	raw, err := json.Marshal(evidence)
+	if err != nil {
+		return err
+	}
+	_, err = d.SQL.ExecContext(ctx, `INSERT INTO ai_setting(key,value,updated_ts) VALUES(?,?,?)
+		ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_ts=excluded.updated_ts
+		WHERE CASE WHEN json_valid(ai_setting.value) THEN
+			COALESCE(json_extract(ai_setting.value,'$.revision'),0) < ? OR
+			(json_extract(ai_setting.value,'$.revision') = ? AND COALESCE(json_extract(ai_setting.value,'$.confirmed_at'),0) <= ?)
+		ELSE 1 END`, aiconfig.KeyNativeSearchEvidence, string(raw), nowTS(),
+		evidence.Revision, evidence.Revision, evidence.ConfirmedAt)
+	return err
 }
 
 // aiEmergencySelect may be extended with additional columns from the same snapshot.
@@ -2396,8 +2431,10 @@ func setChannelAgent(ctx context.Context, q AIQueryer, channel, agentKey string,
 		return err
 	}
 	_, err := q.ExecContext(ctx, `
-		INSERT OR IGNORE INTO ai_channel_agent(channel,agent_id,enabled,priority,cooldown_ms,added_by,added_ts)
-		SELECT ?, id, 1, 100, 8000, 'chat', ? FROM ai_agent WHERE key=?`, channel, nowTS(), agentKey)
+		INSERT INTO ai_channel_agent(channel,agent_id,enabled,priority,cooldown_ms,added_by,added_ts)
+		SELECT ?, id, 1, 100, 8000, 'chat', ? FROM ai_agent WHERE key=?
+		ON CONFLICT(channel,agent_id) DO UPDATE SET enabled=1
+		WHERE ai_channel_agent.enabled=0`, channel, nowTS(), agentKey)
 	return err
 }
 
@@ -2426,7 +2463,7 @@ func (d *DB) AISetMapAgent(ctx context.Context, mapKey, agentKey string, enable 
 // 首项是全局范围（map_key='*'）：加进这里的助手在任何频道都能发言。
 func (d *DB) AIListMaps(ctx context.Context) ([]AIMapInfo, error) {
 	rows, err := d.SQL.QueryContext(ctx, `
-		SELECT m.alias, COALESCE(m.loc,''), ag.display
+		SELECT m.alias, COALESCE(m.loc,''), ag.key, ag.display
 		FROM (
 			SELECT 0 AS ord, ? AS alias, '全局（任何频道）' AS loc
 			UNION
@@ -2434,7 +2471,7 @@ func (d *DB) AIListMaps(ctx context.Context) ([]AIMapInfo, error) {
 		) m
 		LEFT JOIN ai_map_agent c ON c.map_key=m.alias AND c.enabled=1
 		LEFT JOIN ai_agent ag ON ag.id=c.agent_id AND ag.enabled=1 AND ag.deleted_ts=0
-		ORDER BY m.ord, m.alias`, AIMapKeyGlobal, `level\_%`)
+		ORDER BY m.ord, m.alias, c.agent_id`, AIMapKeyGlobal, `level\_%`)
 	if err != nil {
 		return nil, err
 	}
@@ -2443,8 +2480,8 @@ func (d *DB) AIListMaps(ctx context.Context) ([]AIMapInfo, error) {
 	byKey := map[string]*AIMapInfo{}
 	for rows.Next() {
 		var key, label string
-		var display sql.NullString
-		if err := rows.Scan(&key, &label, &display); err != nil {
+		var agentKey, display sql.NullString
+		if err := rows.Scan(&key, &label, &agentKey, &display); err != nil {
 			return nil, err
 		}
 		info, ok := byKey[key]
@@ -2452,6 +2489,9 @@ func (d *DB) AIListMaps(ctx context.Context) ([]AIMapInfo, error) {
 			info = &AIMapInfo{MapKey: key, Label: label}
 			byKey[key] = info
 			order = append(order, key)
+		}
+		if agentKey.Valid {
+			info.AgentKeys = append(info.AgentKeys, agentKey.String)
 		}
 		if display.Valid && display.String != "" {
 			info.Agents = append(info.Agents, display.String)
@@ -3084,7 +3124,7 @@ type AICapabilitySaveResult struct {
 //   - 显式空集合合法，表示全部拒绝；缺记录不写就等于缺配置；
 //   - 同一集合在当前修订上重复保存是幂等的：修订不跳号，也不重复补派命令；
 //   - 记录绑定当前代次：同名 key 恢复后旧配置不生效，保存一次即重新确认；
-//   - readOnlyTools 只保留旧只读粒度，普通保存传 nil（攻略覆盖完整目录）。
+//   - readOnlyTools 用于导入旧只读子集。普通保存传 nil，保留原有收窄。
 func (d *DB) AISaveCapabilities(ctx context.Context, agentKey string, baseRevision int64,
 	capabilities, readOnlyTools []string) (aiconfig.CapabilityState, error) {
 	res, err := d.AISaveCapabilitiesWithRuntime(ctx, agentKey, baseRevision, capabilities, readOnlyTools)
@@ -3115,12 +3155,13 @@ func (d *DB) AISaveCapabilitiesWithRuntime(ctx context.Context, agentKey string,
 	err = d.AIWithRuntimeTx(ctx, func(tx *AIRuntimeTx) error {
 		q := tx.SQL()
 		var deletedTS float64
+		var legacyToolsJSON string
 		var generation, tombstoned int64
 		err := q.QueryRowContext(ctx, `
-			SELECT a.deleted_ts, COALESCE(c.generation,1), COALESCE(c.tombstoned,0)
+			SELECT a.deleted_ts, COALESCE(c.generation,1), COALESCE(c.tombstoned,0), COALESCE(a.tools_json,'[]')
 			FROM ai_agent a
 			LEFT JOIN ai_runtime_control c ON c.agent_key=a.key
-			WHERE a.key=?`, agentKey).Scan(&deletedTS, &generation, &tombstoned)
+			WHERE a.key=?`, agentKey).Scan(&deletedTS, &generation, &tombstoned, &legacyToolsJSON)
 		if errors.Is(err, sql.ErrNoRows) {
 			return fmt.Errorf("%w: %s", ErrAICapabilityInactive, agentKey)
 		}
@@ -3151,14 +3192,32 @@ func (d *DB) AISaveCapabilitiesWithRuntime(ctx context.Context, agentKey string,
 
 		// 相同集合不推进修订：重复保存只刷新代次与时间，不制造空版本。
 		prevSet, prevOK := aiconfig.CapabilitySet{}, false
+		hasGuide := slices.Contains(caps, aiconfig.CapabilityGuideHelp)
+		keepGuide := hasGuide && readOnlyTools == nil
+		provenGuide := len(tools) > 0
+		if keepGuide {
+			if legacy := aiconfig.LegacyReadTools(legacyToolsJSON); len(legacy) > 0 {
+				tools = legacy
+				provenGuide = true
+			}
+		}
 		changed = true
 		if present {
 			if rec, parseErr := aiconfig.ParseCapabilitySet(raw); parseErr == nil {
 				prevSet, prevOK = rec, true
+				if slices.Contains(rec.Capabilities, aiconfig.CapabilityGuideHelp) {
+					provenGuide = true
+					if keepGuide {
+						tools = rec.ReadOnlyTools
+					}
+				}
 				sameCaps := slicesEqual(rec.Capabilities, caps)
 				sameTools := slicesEqual(rec.ReadOnlyTools, tools)
 				changed = !(sameCaps && sameTools)
 			}
+		}
+		if hasGuide && !provenGuide {
+			return fmt.Errorf("%w: 旧攻略授权仅用于兼容历史配置，请选择独立资料能力", ErrAICapabilityInvalid)
 		}
 		nextRevision := current
 		if changed {

@@ -351,8 +351,8 @@ func TestAIPersonalityTwoRolesIndependent(t *testing.T) {
 
 	// 先给两个角色各存一份能力（只攻略 vs 已授权事件），作为「性格不碰能力」的对照。
 	for key, caps := range map[string]string{
-		"hutao": `["guide_help"]`,
-		"klee":  `["guide_help","virtual_fishing"]`,
+		"hutao": `["shop_knowledge"]`,
+		"klee":  `["fishing_knowledge","virtual_fishing"]`,
 	} {
 		code, body := capabilityRequest(t, ts, token, "POST", "/api/ai/capabilities",
 			`{"agent_key":"`+key+`","base_revision":0,"capabilities":`+caps+`}`)
@@ -918,7 +918,7 @@ func TestAIPersonalitySaveKeepsLegacySettingsCapsAndLimits(t *testing.T) {
 		t.Fatalf("写入旧设置: %v", err)
 	}
 	if code, body := capabilityRequest(t, ts, token, "POST", "/api/ai/capabilities",
-		`{"agent_key":"hutao","base_revision":0,"capabilities":["guide_help"]}`); code != 200 {
+		`{"agent_key":"hutao","base_revision":0,"capabilities":["fishing_knowledge"]}`); code != 200 {
 		t.Fatalf("保存能力 = %d: %s", code, body)
 	}
 	settingsBefore := t107SettingRows(t, db)

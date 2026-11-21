@@ -83,3 +83,12 @@ func (s *SessionStore) Clear(key string) {
 	defer s.mu.Unlock()
 	delete(s.sessions, key)
 }
+
+// Clear the carried item before a fresh topic, even if its reply later fails.
+func (s *SessionStore) clearShopFocus(key string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if messages := s.sessions[key]; len(messages) > 0 {
+		messages[len(messages)-1].shopFocus = nil
+	}
+}

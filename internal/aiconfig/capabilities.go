@@ -9,8 +9,7 @@ package aiconfig
 //
 // 边界（T-104 / DEV-111 A）：
 //   - 能力 ID 由服务端映射，模型自称有权不生效；
-//   - 目录只收有调用点的能力：攻略帮助、回应玩家星蓝、参加圆桌、虚拟垂钓、
-//     播报自己渔获、接受目标建议。比赛未接入，不注册占位能力；
+//   - 目录只收有调用点的资料授权与角色行为；
 //   - 事件类能力不新增模型可调用的「任意发言 / 任意发鱼」工具；
 //   - 缺配置 = 只保留基础私聊（无工具）；显式空 = 全部拒绝；
 //     非法 / 旧代次 / 不可验证 = 失败关闭（fail closed），不猜一个默认值；
@@ -22,6 +21,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 )
@@ -31,12 +31,17 @@ const CapabilitySchemaVersion = 1
 
 // 能力 ID。只增不删；删 ID 等于删历史记录里的语义。
 const (
-	CapabilityGuideHelp      = "guide_help"            // 攻略帮助
-	CapabilityReplyStar      = "reply_star"            // 回应玩家星蓝
-	CapabilityJoinRoundtable = "join_roundtable"       // 参加圆桌
-	CapabilityVirtualFishing = "virtual_fishing"       // 虚拟垂钓
-	CapabilityBroadcastCatch = "broadcast_catch"       // 播报自己渔获
-	CapabilityAcceptTarget   = "accept_target_suggest" // 接受目标建议
+	CapabilityGuideHelp        = "guide_help" // 攻略帮助
+	CapabilityFishingKnowledge = "fishing_knowledge"
+	CapabilityShopKnowledge    = "shop_knowledge"
+	CapabilityCraftKnowledge   = "craft_knowledge"
+	CapabilityOnlineSearch     = "online_search"
+	CapabilityReplyStar        = "reply_star"            // 回应玩家星蓝
+	CapabilityJoinRoundtable   = "join_roundtable"       // 参加多人对话
+	CapabilityVirtualFishing   = "virtual_fishing"       // 虚拟垂钓
+	CapabilityBroadcastCatch   = "broadcast_catch"       // 播报自己渔获
+	CapabilityIdleChat         = "idle_chat"             // 闲时搭话
+	CapabilityAcceptTarget     = "accept_target_suggest" // 接受目标建议
 )
 
 // 只读工具名。顺序即界面顺序，也是投影与比对的稳定顺序。
@@ -49,6 +54,9 @@ const (
 	ToolShopPrice     = "shop_price"
 	ToolRecipeLookup  = "recipe_lookup"
 	ToolMapVibe       = "map_vibe"
+	ToolFishingNotes  = "local_fishing_notes"
+	ToolShopNotes     = "local_shop_notes"
+	ToolCraftNotes    = "local_craft_notes"
 )
 
 // 写工具名。当前写集合只有这一个（DEV-106 最小写集）。
@@ -69,17 +77,18 @@ type CapabilityTool struct {
 
 // Capability 是一条可授权能力。
 //
-// ReadTools 只对攻略帮助非空：能力与工具的对应关系由服务端固定，
-// 页面只提交能力 ID，不能自带工具名。
+// 能力与工具的对应关系由服务端固定，页面只提交能力 ID。
 type Capability struct {
 	ID         string   `json:"id"`
 	Label      string   `json:"label"`
 	Desc       string   `json:"desc"`
 	ReadTools  []string `json:"read_tools,omitempty"`
 	WriteTools []string `json:"write_tools,omitempty"`
+	Group      string   `json:"group,omitempty"`
+	Legacy     bool     `json:"legacy,omitempty"`
 	// Event 是这条能力对应的事件类别；空表示不参与事件。
 	Event string `json:"event,omitempty"`
-	// RequiresRoundtable 表示升级到圆桌需要同时具备「参加圆桌」。
+	// RequiresRoundtable 表示升级为多人对话需要同时具备「参加多人对话」。
 	RequiresRoundtable bool `json:"requires_roundtable,omitempty"`
 }
 
@@ -89,19 +98,29 @@ const (
 	EventRoundtable     = "roundtable"      // 系统/游戏服发起的圆桌
 	EventVirtualFishing = "virtual_fishing" // 虚拟钓鱼节拍
 	EventBroadcastCatch = "broadcast_catch" // 自己已提交渔获后的单人频道播报
+	EventIdleChat       = "idle_chat"       // 频道安静时自己找个话头
 )
 
 // capabilityCatalog 是唯一能力目录，顺序即界面顺序。
 var capabilityCatalog = []Capability{
 	{
 		ID:    CapabilityGuideHelp,
-		Label: "攻略帮助",
-		Desc:  "允许查阅鱼种、饵料、点位、物品、价格、配方，以及实时鱼情和地图陪玩信息。",
+		Label: "旧攻略授权",
+		Desc:  "保留该角色原有的只读工具。改用独立资料授权时，请取消此项。",
 		ReadTools: []string{
 			ToolSpeciesLookup, ToolBaitPref, ToolSpotLookup, ToolItemLookup,
 			ToolShopPrice, ToolRecipeLookup, ToolFishQuery, ToolMapVibe,
 		},
+		Group: "knowledge", Legacy: true,
 	},
+	{ID: CapabilityFishingKnowledge, Label: "垂钓资料", Desc: "鱼种、饵料、钓点、游戏鱼情和垂钓心得。",
+		Group: "knowledge", ReadTools: []string{ToolSpeciesLookup, ToolBaitPref, ToolSpotLookup, ToolFishQuery, ToolMapVibe, ToolFishingNotes}},
+	{ID: CapabilityShopKnowledge, Label: "装备与商店", Desc: "装备、道具、静态参考价和商店心得。",
+		Group: "knowledge", ReadTools: []string{ToolItemLookup, ToolShopPrice, ToolShopNotes}},
+	{ID: CapabilityCraftKnowledge, Label: "制作配方", Desc: "配方、产物和制作心得。",
+		Group: "knowledge", ReadTools: []string{ToolRecipeLookup, ToolCraftNotes}},
+	{ID: CapabilityOnlineSearch, Label: "联网搜索", Desc: "启用全局搜索且本地未命中时，可将玩家的问题发送给搜索服务。",
+		Group: "knowledge"},
 	{
 		ID:    CapabilityReplyStar,
 		Label: "回应玩家星蓝",
@@ -110,8 +129,8 @@ var capabilityCatalog = []Capability{
 	},
 	{
 		ID:    CapabilityJoinRoundtable,
-		Label: "参加圆桌",
-		Desc:  "允许参加游戏服或桥接发起的圆桌任务。",
+		Label: "参加多人对话",
+		Desc:  "允许加入游戏服或桥接发起的多人对话。",
 		Event: EventRoundtable,
 	},
 	{
@@ -123,9 +142,15 @@ var capabilityCatalog = []Capability{
 	{
 		ID:                 CapabilityBroadcastCatch,
 		Label:              "播报自己渔获",
-		Desc:               "自己已提交渔获后，允许在单人频道报一句；升级为圆桌还需「参加圆桌」。",
+		Desc:               "自己已提交渔获后，允许在单人频道报一句；升级为多人对话还需「参加多人对话」。",
 		Event:              EventBroadcastCatch,
 		RequiresRoundtable: true,
+	},
+	{
+		ID:    CapabilityIdleChat,
+		Label: "闲时搭话",
+		Desc:  "没鱼、频道里也没人说话时，允许自己找个话头。",
+		Event: EventIdleChat,
 	},
 	{
 		ID:         CapabilityAcceptTarget,
@@ -142,9 +167,12 @@ var capabilityTools = []CapabilityTool{
 	{Name: ToolBaitPref, Label: "饵料偏好", Desc: "查某种鱼常吃的饵", Kind: "read", Route: "local", ReadOnly: true, AgentPublic: true},
 	{Name: ToolSpotLookup, Label: "点位", Desc: "查某张图的钓点坐标", Kind: "read", Route: "local", ReadOnly: true, AgentPublic: true},
 	{Name: ToolItemLookup, Label: "物品资料", Desc: "查装备、道具的基本资料", Kind: "read", Route: "local", ReadOnly: true, AgentPublic: true},
-	{Name: ToolShopPrice, Label: "商店价格", Desc: "查商店里的售价", Kind: "read", Route: "local", ReadOnly: true, AgentPublic: true},
+	{Name: ToolShopPrice, Label: "商店参考价", Desc: "查静态参考价，实时售价与库存以游戏商店为准", Kind: "read", Route: "local", ReadOnly: true, AgentPublic: true},
 	{Name: ToolRecipeLookup, Label: "配方", Desc: "查制作配方", Kind: "read", Route: "local", ReadOnly: true, AgentPublic: true},
 	{Name: ToolMapVibe, Label: "陪玩鱼情", Desc: "当前地图 + 此刻天气 + 本图鱼种（不含饵料，适合角色聊天）", Kind: "read", Route: "gs_read", ReadOnly: true, AgentPublic: true},
+	{Name: ToolFishingNotes, Label: "本地垂钓心得", Desc: "检索管理员维护的垂钓资料", Kind: "read", Route: "local", ReadOnly: true, AgentPublic: true},
+	{Name: ToolShopNotes, Label: "本地装备心得", Desc: "检索管理员维护的装备与商店资料", Kind: "read", Route: "local", ReadOnly: true, AgentPublic: true},
+	{Name: ToolCraftNotes, Label: "本地制作心得", Desc: "检索管理员维护的制作资料", Kind: "read", Route: "local", ReadOnly: true, AgentPublic: true},
 	{Name: ToolActorTargetSuggest, Label: "换目标建议", Desc: "玩家明显在安利某条鱼时，提交一条换鱼/换图建议；由游戏服决定是否应用。", Kind: "write", Route: "gs_write", ReadOnly: false, AgentPublic: true},
 }
 
@@ -479,35 +507,36 @@ func (s CapabilityState) Tools() []string {
 
 // ProjectTools 把能力集合投影成允许的读/写工具。
 //
-// 只有攻略帮助授予只读工具；legacyReadTools 非 nil 时按旧子集收窄
-// （旧表单的粒度要保留，不能因为升级就自动扩到全部目录）。
+// 旧子集只收窄旧攻略授权。明确勾选的新主题可独立授权。
 func ProjectTools(caps []string, legacyReadTools []string) (read, write []string) {
-	has := func(id string) bool {
-		for _, c := range caps {
-			if c == id {
-				return true
+	readSet, writeSet := map[string]bool{}, map[string]bool{}
+	for _, id := range caps {
+		c, ok := CapabilityByID(id)
+		if !ok {
+			continue
+		}
+		for _, name := range c.ReadTools {
+			if id != CapabilityGuideHelp || legacyReadTools == nil || slices.Contains(legacyReadTools, name) {
+				readSet[name] = true
 			}
 		}
-		return false
-	}
-	if has(CapabilityGuideHelp) {
-		all := GuideReadTools()
-		if legacyReadTools != nil {
-			keep := map[string]bool{}
-			for _, t := range legacyReadTools {
-				keep[t] = true
-			}
-			for _, t := range all {
-				if keep[t] {
-					read = append(read, t)
-				}
-			}
-		} else {
-			read = all
+		for _, name := range c.WriteTools {
+			writeSet[name] = true
 		}
 	}
-	if has(CapabilityAcceptTarget) {
-		write = append(write, ToolActorTargetSuggest)
+	for _, name := range GuideReadTools() {
+		if readSet[name] {
+			read = append(read, name)
+			delete(readSet, name)
+		}
+	}
+	for _, tool := range capabilityTools {
+		if readSet[tool.Name] {
+			read = append(read, tool.Name)
+		}
+		if writeSet[tool.Name] {
+			write = append(write, tool.Name)
+		}
 	}
 	return read, write
 }

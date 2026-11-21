@@ -68,7 +68,7 @@ func TestAICapabilitiesSaveAndConflict(t *testing.T) {
 	if err != nil {
 		t.Fatalf("首次保存: %v", err)
 	}
-	if st.Revision != 1 || len(st.ReadTools) != 8 || len(st.WriteTools) != 1 {
+	if st.Revision != 1 || strings.Join(st.ReadTools, ",") != aiconfig.ToolMapVibe || len(st.WriteTools) != 1 {
 		t.Fatalf("首次保存投影 = %+v", st)
 	}
 	// 旧表单即使还写着 ["map_vibe"]，新记录仍然生效。
@@ -76,7 +76,7 @@ func TestAICapabilitiesSaveAndConflict(t *testing.T) {
 	if err != nil || !view.Present || view.Revision != 1 {
 		t.Fatalf("回读 = %+v/%v", view, err)
 	}
-	if len(view.State.ReadTools) != 8 || view.State.Legacy {
+	if strings.Join(view.State.ReadTools, ",") != aiconfig.ToolMapVibe || view.State.Legacy {
 		t.Fatalf("旧 tools_json 覆盖了新意图: %+v", view.State)
 	}
 
@@ -182,6 +182,15 @@ func TestAICapabilitiesLegacyGranularityPreserved(t *testing.T) {
 	if strings.Join(st.ReadTools, ",") != aiconfig.ToolItemLookup+","+aiconfig.ToolMapVibe {
 		t.Fatalf("旧粒度投影 = %v", st.ReadTools)
 	}
+	st, err = d.AISaveCapabilities(ctx, "companion", 1,
+		[]string{aiconfig.CapabilityGuideHelp, aiconfig.CapabilityJoinRoundtable}, nil)
+	if err != nil || strings.Join(st.ReadTools, ",") != aiconfig.ToolItemLookup+","+aiconfig.ToolMapVibe {
+		t.Fatalf("编辑其它能力扩大了旧授权 = %v / %v", st.ReadTools, err)
+	}
+	if _, err := d.AISaveCapabilities(ctx, "host", 0,
+		[]string{aiconfig.CapabilityGuideHelp}, nil); !errors.Is(err, ErrAICapabilityInvalid) {
+		t.Fatalf("无历史授权的角色不能新建旧攻略授权：%v", err)
+	}
 }
 
 // 保存「虚拟垂钓」时按当前修订补派 actor_set_enabled：启用只入队不应用，
@@ -282,7 +291,7 @@ func TestAICapabilitiesRuntimeDispatchAndIdempotency(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if view.State.State != aiconfig.CapabilityStateConfigured || len(view.State.ReadTools) != 8 ||
+	if view.State.State != aiconfig.CapabilityStateConfigured || strings.Join(view.State.ReadTools, ",") != aiconfig.ToolMapVibe ||
 		view.State.Generation != 2 || view.State.Has(aiconfig.CapabilityVirtualFishing) {
 		t.Fatalf("禁用后代次解释 = %+v", view.State)
 	}

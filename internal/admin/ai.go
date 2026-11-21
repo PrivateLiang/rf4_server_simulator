@@ -619,6 +619,18 @@ func (s *Server) handleAIStatus(w http.ResponseWriter, r *http.Request) {
 	retestCurrent := snapErr == nil && credState == "configured" && currentAIRetest(em, revision, retest)
 	destHost := aiconfig.DestinationHost(baseURL)
 	displayBase := aiconfig.RedactURLForDisplay(baseURL)
+	searchConfig := aiconfig.WebSearchSettings{
+		Enabled: settings[aiconfig.KeyWebSearchEnabled] == "1",
+		Mode:    settings[aiconfig.KeySearchMode], Endpoint: settings[aiconfig.KeySearchEndpoint],
+	}
+	searchSupported := snapErr == nil && aiconfig.DeepSeekNativeSearchSupported(baseURL, snap.Protocol, modelID, snap.AuthScheme)
+	var searchEvidence aiconfig.NativeSearchEvidence
+	if searchSupported && revision > 0 {
+		err := json.Unmarshal([]byte(s.db.AISetting(ctx, aiconfig.KeyNativeSearchEvidence, "")), &searchEvidence)
+		if err != nil || searchEvidence.Revision != revision {
+			searchEvidence = aiconfig.NativeSearchEvidence{}
+		}
+	}
 
 	savedDisplay := "尚未保存可用连接"
 	switch {
@@ -883,6 +895,10 @@ func (s *Server) handleAIStatus(w http.ResponseWriter, r *http.Request) {
 		"security": security,
 		"provider": providerName, "base_url": displayBase,
 		"model_id": modelID, "api_key_masked": credMasked, "agents": agents,
+		"web_search": map[string]any{
+			"mode": searchConfig.EffectiveMode(), "native_supported": searchSupported,
+			"native_confirmed_at": searchEvidence.ConfirmedAt,
+		},
 		"last_error": lastError, "bridge": s.aiBridgeHealth(), "queue": queue,
 		// 配置发布状态（DEV-114 A）：页面只呈现实际去向、修订、凭据与复测状态。
 		"revision":     revision,
@@ -1221,6 +1237,26 @@ func (s *Server) handleAISettingsSave(w http.ResponseWriter, r *http.Request) {
 		if err := json.Unmarshal(raw, &val); err != nil {
 			continue
 		}
+		if key == aiconfig.KeySearchMode {
+			mode, _ := val.(string)
+			if !aiconfig.ValidSearchMode(strings.TrimSpace(mode)) {
+				httpError(w, 400, "搜索方式不合法")
+				return
+			}
+		}
+		// 氛围档只接受预设或 custom；非法值直接拒绝，避免库里留下无法解释的值。
+		if key == "ai_fishing_mood" {
+			id, _ := val.(string)
+			id = strings.TrimSpace(id)
+			if id != aiconfig.TalkMoodCustom {
+				if _, ok := aiconfig.TalkMoodByID(id); !ok {
+					httpError(w, 400, "氛围档不合法")
+					return
+				}
+			}
+			updates[key] = id
+			continue
+		}
 		if v, valid := NormalizeSettingValue(spec, val); valid {
 			updates[key] = v
 		}
@@ -1441,42 +1477,53 @@ func (s *Server) handleAIChannels(w http.ResponseWriter, r *http.Request) {
 		Display string `json:"display"`
 	}
 	agents := []agentView{}
-	if list, err := s.db.AIListAgents(ctx); err == nil {
-		for _, a := range list {
-			agents = append(agents, agentView{a.Key, a.Display})
-		}
+	agentList, err := s.db.AIListAgents(ctx)
+	if err != nil {
+		httpError(w, 500, "读取角色列表失败")
+		return
+	}
+	for _, a := range agentList {
+		agents = append(agents, agentView{a.Key, a.Display})
 	}
 	subscribed, err := s.db.AIChannelSubscribed(ctx, channel)
 	if err != nil {
-		subscribed = []string{}
+		httpError(w, 500, "读取频道订阅失败")
+		return
 	}
 	// 频道下拉：数据库里见过的频道 + 已接入 Agent 数/名单。
-	channels := []map[string]any{}
-	if list, err := s.db.AIListChannels(ctx); err == nil {
-		for _, c := range list {
-			channels = append(channels, map[string]any{
-				"name": c.Name, "label": c.Label, "count": c.Count, "agents": c.Agents,
-			})
-		}
+	channelList, err := s.db.AIListChannels(ctx)
+	if err != nil {
+		httpError(w, 500, "读取频道列表失败")
+		return
+	}
+	channels := make([]map[string]any, 0, len(channelList))
+	for _, c := range channelList {
+		channels = append(channels, map[string]any{
+			"name": c.Name, "label": c.Label, "count": c.Count, "agents": c.Agents,
+			"agent_keys": emptyIfNil(c.AgentKeys),
+		})
 	}
 	// 地图级订阅：官服一张图有十几个到上百个区域频道，按地图订阅才不用逐个拉。
-	maps := []map[string]any{}
-	if list, err := s.db.AIListMaps(ctx); err == nil {
-		for _, m := range list {
-			maps = append(maps, map[string]any{
-				"map_key": m.MapKey, "label": m.Label, "count": m.Count, "agents": m.Agents,
-			})
-		}
+	mapList, err := s.db.AIListMaps(ctx)
+	if err != nil {
+		httpError(w, 500, "读取地图列表失败")
+		return
+	}
+	maps := make([]map[string]any, 0, len(mapList))
+	for _, m := range mapList {
+		maps = append(maps, map[string]any{
+			"map_key": m.MapKey, "label": m.Label, "count": m.Count, "agents": m.Agents,
+			"agent_keys": emptyIfNil(m.AgentKeys),
+		})
 	}
 	// 当前频道所属的地图：让后台能直接显示「这个频道归哪张图管」。
 	curMap, curMapKey := "", ""
 	if k, ok := s.db.ChannelMapKey(ctx, channel); ok {
 		curMapKey = k
-		for _, m := range maps {
-			if mm, ok := m["map_key"].(string); ok && mm == k {
-				if lb, ok := m["label"].(string); ok {
-					curMap = lb
-				}
+		for _, m := range mapList {
+			if m.MapKey == k {
+				curMap = m.Label
+				break
 			}
 		}
 	}
@@ -1532,7 +1579,9 @@ func (s *Server) handleAIChannelSave(w http.ResponseWriter, r *http.Request) {
 		httpError(w, 400, "请选择 Agent")
 		return
 	}
-	payload, _ := json.Marshal(map[string]any{"channel": req.Channel, "enabled": req.Enabled})
+	payload, _ := json.Marshal(store.AIRuntimeChannelSetMemberPayload{
+		Channel: req.Channel, Enabled: req.Enabled,
+	})
 	cmd, ok := s.enqueueAIIntent(ctx, w, store.AIRuntimeEnqueueRequest{
 		Source:   store.AIRuntimeSourceAdmin,
 		Kind:     store.AIRuntimeKindChannelSetMember,

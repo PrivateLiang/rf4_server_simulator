@@ -2,6 +2,7 @@ package aiconfig
 
 import (
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -9,12 +10,13 @@ import (
 // 目录只收有调用点的能力；写集合只有 actor_target_suggest。
 func TestCapabilityCatalogShape(t *testing.T) {
 	caps := CapabilityCatalog()
-	if len(caps) != 6 {
+	if len(caps) != 11 {
 		t.Fatalf("能力数量 = %d", len(caps))
 	}
 	wantOrder := []string{
-		CapabilityGuideHelp, CapabilityReplyStar, CapabilityJoinRoundtable,
-		CapabilityVirtualFishing, CapabilityBroadcastCatch, CapabilityAcceptTarget,
+		CapabilityGuideHelp, CapabilityFishingKnowledge, CapabilityShopKnowledge, CapabilityCraftKnowledge, CapabilityOnlineSearch,
+		CapabilityReplyStar, CapabilityJoinRoundtable,
+		CapabilityVirtualFishing, CapabilityBroadcastCatch, CapabilityIdleChat, CapabilityAcceptTarget,
 	}
 	for i, id := range wantOrder {
 		if caps[i].ID != id {
@@ -38,7 +40,7 @@ func TestCapabilityCatalogShape(t *testing.T) {
 		t.Fatalf("攻略只读工具 = %v", GuideReadTools())
 	}
 	for _, id := range []string{CapabilityReplyStar, CapabilityJoinRoundtable,
-		CapabilityVirtualFishing, CapabilityBroadcastCatch} {
+		CapabilityVirtualFishing, CapabilityBroadcastCatch, CapabilityIdleChat} {
 		c, ok := CapabilityByID(id)
 		if !ok || c.Event == "" || len(c.ReadTools) > 0 || len(c.WriteTools) > 0 {
 			t.Fatalf("事件能力不应投影工具: %+v", c)
@@ -47,6 +49,22 @@ func TestCapabilityCatalogShape(t *testing.T) {
 }
 
 // 显式集合投影：只有攻略给只读，只有接受建议给写；其余能力不碰工具。
+// 闲时搭话是可独立开关的主动事件能力，不投影任何工具。
+func TestIdleChatCapability(t *testing.T) {
+	c, ok := CapabilityByID(CapabilityIdleChat)
+	if !ok {
+		t.Fatal("缺少 idle_chat 能力")
+	}
+	if c.Event != EventIdleChat || c.Legacy || c.RequiresRoundtable ||
+		len(c.ReadTools) != 0 || len(c.WriteTools) != 0 {
+		t.Fatalf("闲时搭话能力定义错误: %+v", c)
+	}
+	got, ok := CapabilityForEvent(EventIdleChat)
+	if !ok || got.ID != CapabilityIdleChat {
+		t.Fatalf("事件映射错误: %+v ok=%v", got, ok)
+	}
+}
+
 func TestProjectToolsByCapability(t *testing.T) {
 	read, write := ProjectTools([]string{CapabilityGuideHelp}, nil)
 	if len(read) != 8 || len(write) != 0 {
@@ -63,6 +81,27 @@ func TestProjectToolsByCapability(t *testing.T) {
 	read, write = ProjectTools(nil, nil)
 	if len(read) != 0 || len(write) != 0 {
 		t.Fatalf("空集合 = %v/%v", read, write)
+	}
+}
+
+func TestKnowledgeCapabilitiesAreIndependent(t *testing.T) {
+	for _, tc := range []struct {
+		capability string
+		tools      []string
+	}{
+		{CapabilityShopKnowledge, []string{ToolItemLookup, ToolShopPrice, ToolShopNotes}},
+		{CapabilityCraftKnowledge, []string{ToolRecipeLookup, ToolCraftNotes}},
+		{CapabilityFishingKnowledge, []string{ToolSpeciesLookup, ToolBaitPref, ToolSpotLookup, ToolFishQuery, ToolMapVibe, ToolFishingNotes}},
+		{CapabilityOnlineSearch, nil},
+	} {
+		read, write := ProjectTools([]string{tc.capability}, nil)
+		if !slices.Equal(read, tc.tools) || len(write) != 0 {
+			t.Errorf("%s 的投影为 %v / %v，期望 %v / 无写操作", tc.capability, read, write, tc.tools)
+		}
+	}
+	read, _ := ProjectTools([]string{CapabilityGuideHelp, CapabilityShopKnowledge}, []string{ToolItemLookup})
+	if !slices.Equal(read, []string{ToolItemLookup, ToolShopPrice, ToolShopNotes}) {
+		t.Fatalf("历史子集与显式新授权应合并去重：%v", read)
 	}
 }
 

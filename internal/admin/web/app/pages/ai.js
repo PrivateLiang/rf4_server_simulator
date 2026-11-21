@@ -4,6 +4,7 @@ import {
   h, api, post, icon, toast, errText, dialog, confirmDialog, drawer, pageHead, section, callout, badge, empty, btn,
   Form, savebar, setLeaveGuard, segmented, tabs, toggleEl, relTime, fmt, navigate, parseHash,
 } from '../core.js';
+import { localKnowledgeSection } from '../ai-knowledge.js';
 
 // ---------- 文案：设置项的标签、说明、单位全部在这里，后端只提供范围与默认值 ----------
 const COPY = {
@@ -60,7 +61,7 @@ async function loadStatus() {
 async function loadExtras() {
   const [caps, chans, pers] = await Promise.all([
     api('/api/ai/capabilities').catch(() => null),
-    api('/api/ai/channels?name=nav1_03').catch(() => null),
+    api('/api/ai/channels').catch(() => null),
     api('/api/ai/personality').catch(() => null),
   ]);
   S.caps = caps;
@@ -135,6 +136,9 @@ export default async function aiPage(params) {
   renderNav();
   show();
   root.append(head, h('div', { class: 'subnav-layout' }, sub, content));
+  if (params[0] === 'conn' && params[1] === 'search') {
+    requestAnimationFrame(() => root.querySelector('#ai-web-search')?.scrollIntoView({ block: 'start' }));
+  }
   return root;
 }
 
@@ -292,7 +296,7 @@ function agentDrawer(key, tab = 'profile') {
     foot: [btn('删除角色', async () => {
       if (!(await confirmDialog({ title: `删除「${a.display}」？`, desc: '聊天记录会保留。之后用同一个内部标识重新创建，可以恢复这个角色。', confirm: '删除', danger: true }))) return;
       const r = await post('/api/ai/agent/delete', { key });
-      await waitCommand(r.command_id, '已删除');
+      if (!await waitCommand(r.command_id, '已删除')) return;
       d.close(); await S.refresh();
     }, 'danger sm', { icon: 'trash' }), h('span', { class: 'spacer' }), agentStatus(a), joinBtn],
     width: 'min(820px,100%)',
@@ -300,7 +304,9 @@ function agentDrawer(key, tab = 'profile') {
   async function reopen() { d.close(); await S.refresh(); agentDrawer(key, current); }
   let current = tab;
   const pane = h('div');
-  const builders = { profile: agentProfile, scope: agentScope, abilities: agentAbilities, personality: agentPersonality, record: agentRecord };
+  const builders = { profile: agentProfile, scope: (agent) => agentScope(agent),
+    abilities: (agent) => agentAbilities(agent, reopen, () => { d.close(); navigate('ai', 'conn', 'search'); }),
+    personality: agentPersonality, record: agentRecord };
   const showTab = (t) => { current = t; pane.replaceChildren(builders[t](a, reopen)); };
   body.append(tabs([['profile', '资料'], ['scope', '活动范围'], ['abilities', '能力'], ['personality', '性格'], ['record', '钓鱼战绩']], tab, showTab), pane);
   showTab(tab);
@@ -331,50 +337,105 @@ function agentProfile(a, reopen) {
     h('div', { class: 'row', style: { justifyContent: 'flex-end' } }, status, save));
 }
 
-function agentScope(a, reopen) {
-  const data = S.channels || {};
+function agentScope(a, advancedOpen = false) {
+  const root = h('div', { class: 'stack' });
+  const data = S.channels;
+  async function reload(open) {
+    try {
+      S.channels = await api('/api/ai/channels');
+    } catch (e) {
+      S.channels = null;
+      toast('读取活动范围失败：' + errText(e), 'bad');
+    }
+    if (root.isConnected) root.replaceWith(agentScope(a, open));
+  }
+  if (!data) {
+    root.append(empty('读不到活动范围', '请重试读取。', btn('重试', async (e) => {
+      e.currentTarget.disabled = true;
+      await reload(advancedOpen);
+    })));
+    return root;
+  }
   const maps = data.maps || [];
   const channels = data.channels || [];
-  const mine = maps.filter((m) => (m.agents || []).includes(a.key));
-  const myChannels = channels.filter((c) => (c.agents || []).includes(a.key));
+  const isMember = (scope) => (scope.agent_keys || []).includes(a.key);
+  const mine = maps.filter(isMember);
+  const myChannels = channels.filter(isMember);
   const mapName = (m) => (m.map_key === '*' ? '所有地图（任何频道）' : (m.label || m.map_key));
-  const setMap = async (mapKey, on) => { await post('/api/ai/channel', { map_key: mapKey, agent: a.key, enabled: on }); toast(on ? '已添加' : '已移除'); await reopen(); };
+  async function changeScope(scope, enabled) {
+    const buttons = root.querySelectorAll('button:not([disabled])');
+    buttons.forEach((b) => { b.disabled = true; });
+    try {
+      const r = await post('/api/ai/channel', { ...scope, agent: a.key, enabled });
+      const message = enabled ? '已添加' : '已移除';
+      if (scope.channel) {
+        if (!await waitCommand(r.command_id, message)) return;
+      } else {
+        toast(message);
+      }
+      await reload(advanced.open);
+    } catch (e) {
+      toast(errText(e), 'bad');
+    } finally {
+      buttons.forEach((b) => { b.disabled = false; });
+    }
+  }
   const select = h('select', { class: 'select' }, maps.filter((m) => !mine.includes(m)).map((m) => h('option', { value: m.map_key, text: mapName(m) })));
-  const chSelect = h('select', { class: 'select' }, channels.filter((c) => !myChannels.includes(c)).map((c) => h('option', { value: c.name, text: c.label ? `${c.label}（${c.name}）` : c.name })));
-  const setChannel = async (name, on) => { const r = await post('/api/ai/channel', { channel: name, agent: a.key, enabled: on }); await waitCommand(r.command_id, on ? '已添加' : '已移除'); await reopen(); };
-  return h('div', { class: 'stack' },
-    !a.joined ? callout('warn', '这个角色还不在游戏中。设置好范围后，记得点下方「进入游戏」。') : null,
-    h('p', { class: 'text-2 small', text: '角色只会在这些地方的公共频道里接话。私聊不受影响，任何时候都能找它。' }),
+  const chSelect = channels.length
+    ? h('select', { class: 'select', 'aria-label': '频道' }, channels.filter((c) => !isMember(c)).map((c) => h('option', { value: c.name, text: c.label ? `${c.label}（${c.name}）` : c.name })))
+    : h('input', { class: 'input', type: 'text', placeholder: '输入已知的频道标识', 'aria-label': '频道标识' });
+  const addChannel = btn('添加频道', () => {
+    const channel = chSelect.value.trim();
+    if (channel) return changeScope({ channel }, true);
+    toast('请输入频道标识', 'bad');
+    chSelect.focus();
+  }, '', { disabled: channels.length > 0 && !chSelect.options.length });
+  const advanced = h('details', { class: 'advanced', open: advancedOpen }, h('summary', {}, '按频道设置 ', h('small', { text: '（高级）' })),
+    h('div', { class: 'stack', style: { paddingTop: '12px' } },
+      h('p', { class: 'muted small', text: '频道订阅只覆盖选中的区域，可与地图订阅同时使用。玩家也可以在游戏里说「@邀请 角色名」「@移出 角色名」。' }),
+      myChannels.length ? h('div', { class: 'card' }, h('div', { class: 'list' }, myChannels.map((c) => h('div', { class: 'list-item' }, h('div', { class: 'grow' }, c.label || c.name, ' ', h('code', { class: 'muted', text: c.name })), btn('移除', () => changeScope({ channel: c.name }, false), 'ghost sm'))))) : null,
+      !channels.length ? h('p', { class: 'muted small', text: '服务器还没有记录频道。进入游戏切换频道后，可刷新页面查看。' }) : null,
+      h('div', { class: 'row' }, h('div', { class: 'grow' }, chSelect), addChannel)));
+  if (!a.joined) root.append(callout('warn', '设置好范围后，点击「进入游戏」让玩家看到这个角色。'));
+  root.append(
+    h('p', { class: 'text-2 small', text: '活动范围影响角色在公共频道里的自动接话。角色进入游戏后，玩家可通过联系人私聊。' }),
     h('div', { class: 'card' }, mine.length
-      ? h('div', { class: 'list' }, mine.map((m) => h('div', { class: 'list-item' }, h('div', { class: 'grow title', text: mapName(m) }), btn('移除', () => setMap(m.map_key, false), 'ghost sm'))))
-      : empty('还没有活动范围', '添加一个地图，角色就会在那里的频道接话。')),
-    h('div', { class: 'row' }, h('div', { class: 'grow' }, select), btn('添加', () => select.value && setMap(select.value, true), 'primary', { disabled: !select.options.length })),
-    h('details', { class: 'advanced' }, h('summary', {}, '只在某一个频道接话 ', h('small', { text: '（高级）' })),
-      h('div', { class: 'stack', style: { paddingTop: '12px' } },
-        h('p', { class: 'muted small', text: '一张地图有多个区域频道。如果只想让角色在其中一个频道出现，在这里单独添加。玩家也可以在游戏里说「@邀请 角色名」「@移出 角色名」。' }),
-        myChannels.length ? h('div', { class: 'card' }, h('div', { class: 'list' }, myChannels.map((c) => h('div', { class: 'list-item' }, h('div', { class: 'grow' }, c.label || c.name, ' ', h('code', { class: 'muted', text: c.name })), btn('移除', () => setChannel(c.name, false), 'ghost sm'))))) : null,
-        h('div', { class: 'row' }, h('div', { class: 'grow' }, chSelect), btn('添加频道', () => chSelect.value && setChannel(chSelect.value, true), '', { disabled: !chSelect.options.length })))));
+      ? h('div', { class: 'list' }, mine.map((m) => h('div', { class: 'list-item' }, h('div', { class: 'grow title', text: mapName(m) }), btn('移除', () => changeScope({ map_key: m.map_key }, false), 'ghost sm'))))
+      : empty('还没有订阅地图', '添加地图可覆盖该地图下的所有频道。')),
+    h('div', { class: 'row' }, h('div', { class: 'grow' }, select), btn('添加', () => select.value && changeScope({ map_key: select.value }, true), 'primary', { disabled: !select.options.length })),
+    advanced);
+  return root;
 }
 
-function agentAbilities(a, reopen) {
+function agentAbilities(a, reopen, openConnection) {
   const catalog = (S.caps && S.caps.catalog) || [];
   const view = S.capByKey[a.key];
   const have = new Set((view && view.capabilities) || []);
   const boxes = {};
-  const items = catalog.map((cap) => {
+  const renderAbility = (cap) => {
     const box = h('input', { type: 'checkbox' });
     box.checked = have.has(cap.id);
     boxes[cap.id] = box;
     return h('label', { class: 'list-item', style: { cursor: 'pointer', alignItems: 'flex-start' } }, box,
       h('div', { class: 'grow' }, h('div', { class: 'title', text: cap.label || cap.id }), cap.desc ? h('div', { class: 'sub', text: cap.desc }) : null,
         cap.requires_roundtable ? h('div', { class: 'sub', style: { color: 'var(--warn)' }, text: '需要同时打开「参加多人对话」' }) : null));
-  });
+  };
+  const globalSearch = setting('web_search_enabled');
+  const online = globalSearch === '1' || globalSearch === true;
+  const legacy = catalog.filter((cap) => cap.legacy && have.has(cap.id));
+  let removeLegacy = false;
+  const visible = catalog.filter((cap) => !cap.legacy && (online || cap.id !== 'online_search'));
+  const knowledge = visible.filter((cap) => cap.group === 'knowledge').map(renderAbility);
+  const behavior = visible.filter((cap) => cap.group !== 'knowledge').map(renderAbility);
   let stateText = '还没设置过能力，目前只会私聊。';
-  if (view && view.present) {
+  if (view?.legacy && !view.present) {
+    stateText = '沿用历史只读范围';
+  } else if (view?.present) {
     stateText = { available: '已生效', pending: '已保存，正在应用到游戏', failed: '已保存，但应用到游戏时失败了', unavailable: '没有生效（角色可能已被删除）' }[view.availability] || '状态未知';
   }
   const save = btn('保存能力', async () => {
-    const caps = Object.entries(boxes).filter(([, b]) => b.checked).map(([id]) => id);
+    const caps = [...have].filter((id) => !boxes[id] && (!removeLegacy || !legacy.some((c) => c.id === id)));
+    caps.push(...Object.entries(boxes).filter(([, b]) => b.checked).map(([id]) => id));
     if (caps.includes('broadcast_catch') && !caps.includes('join_roundtable')) { toast('「播报自己的渔获」需要同时打开「参加多人对话」', 'bad'); return; }
     try {
       const d = await post('/api/ai/capabilities', { agent_key: a.key, base_revision: view ? view.revision : 0, capabilities: caps });
@@ -382,12 +443,24 @@ function agentAbilities(a, reopen) {
       await reopen();
     } catch (e) { toast(errText(e), 'bad'); if (/已被其他管理员更新/.test(errText(e))) await reopen(); }
   }, 'primary');
+  const legacyStatus = h('span', { text: '仍保留历史只读权限' });
+  const legacyAction = btn('移除历史权限', () => {
+    removeLegacy = !removeLegacy;
+    legacyStatus.textContent = removeLegacy ? '保存后移除历史只读权限' : '仍保留历史只读权限';
+    legacyAction.textContent = removeLegacy ? '撤销移除' : '移除历史权限';
+  }, 'ghost sm');
+  const searchNotice = !online && catalog.some((c) => c.id === 'online_search')
+    ? h('div', { class: 'list-item' }, h('span', { class: 'grow muted small', text: '全局联网已关闭' }), btn('去配置联网', openConnection, 'ghost sm')) : null;
   return h('div', { class: 'stack' },
-    h('p', { class: 'text-2 small', text: '能力决定它「能不能」做一件事，没勾选的事它永远不会做。勾选之后，做不做还要看「性格」。' }),
+    h('p', { class: 'text-2 small', text: '按角色用途选择可查的资料和可做的事。自动接话的时机还受性格影响。' }),
     h('div', { class: 'row' }, h('span', { class: 'muted small', text: '当前状态' }), badge(stateText, view && view.availability === 'available' ? 'ok' : view && view.availability === 'failed' ? 'bad' : '')),
     view && view.availability === 'failed' ? callout('bad', h('span', {}, '能力没能应用到游戏。', h('a', { href: '#', onclick: async (e) => { e.preventDefault(); await post('/api/ai/capabilities', { agent_key: a.key, base_revision: view.revision, capabilities: view.capabilities || [] }); toast('已重试'); await reopen(); } }, '重试'))) : null,
-    catalog.length ? h('div', { class: 'card' }, h('div', { class: 'list' }, items)) : empty('读不到能力列表'),
-    h('div', { class: 'row', style: { justifyContent: 'flex-end' } }, save));
+    knowledge.length || searchNotice ? h('div', { class: 'card' }, h('div', { class: 'list' }, h('div', { class: 'list-item title', text: '资料查询' }), knowledge, searchNotice)) : null,
+    behavior.length ? h('div', { class: 'card' }, h('div', { class: 'list' }, h('div', { class: 'list-item title', text: '角色行为' }), behavior)) : null,
+    catalog.length ? null : empty('读不到能力列表'),
+    h('div', { class: 'row' },
+      legacy.length ? h('div', { class: 'row muted small grow' }, legacyStatus, legacyAction) : h('span', { class: 'spacer' }),
+      save));
 }
 
 // 性格 = 「想不想做」：四个旋钮（0–100，默认 50）经同一条派生公式，同时决定行为（起桌、接话、换目标、休息）
@@ -450,7 +523,7 @@ function agentRecord(a, reopen) {
       body: btn('清除', async () => {
         if (!(await confirmDialog({ title: '清除好成绩记忆？', desc: `「${a.display}」会忘记自己的星级、稀有鱼成绩。渔获记录保留。`, confirm: '清除', danger: true }))) return;
         const r = await post('/api/ai/memory/clear', { key: a.key });
-        await waitCommand(r.command_id, '已清除');
+        if (!await waitCommand(r.command_id, '已清除')) return;
         await reopen();
       }, 'danger'),
     }));
@@ -458,19 +531,34 @@ function agentRecord(a, reopen) {
 
 // 运行态命令：后台受理后要等游戏服应用，轮询到结果
 async function waitCommand(id, okText) {
-  if (!id) { toast(okText); return; }
+  if (!id) { toast('服务器未返回操作编号，请刷新后核对状态', 'bad'); return false; }
   toast('已提交，正在应用到游戏…');
   const deadline = Date.now() + 30000;
   while (Date.now() < deadline) {
-    const d = await api('/api/ai/commands/' + encodeURIComponent(id)).catch(() => ({}));
-    if (d.status && d.status !== 'pending') {
-      if (d.status === 'applied') toast(okText);
-      else toast((d.status === 'rejected' ? '游戏拒绝了这个操作：' + (d.reason || '规则不允许') : '操作已过期，请重试'), 'bad');
-      return;
+    let d;
+    try {
+      d = await api('/api/ai/commands/' + encodeURIComponent(id), { signal: AbortSignal.timeout(Math.max(1, deadline - Date.now())) });
+    } catch (e) {
+      if (e.name === 'TimeoutError') break;
+      toast('无法确认操作是否生效，请刷新后核对：' + errText(e), 'bad');
+      return false;
     }
+    if (d.status === 'applied') { toast(okText); return true; }
+    if (d.status === 'rejected') {
+      const reasons = {
+        agent_missing: '角色已不存在',
+        agent_disabled: '角色已停用',
+        emergency_stop: 'AI 紧急停止已开启，请解除后重试',
+        queued_before_resume: '操作属于上一次运行，请重新提交',
+      };
+      toast('游戏服拒绝了操作：' + (reasons[d.reason] || d.reason || '规则不允许'), 'bad');
+      return false;
+    }
+    if (d.status === 'expired') { toast('操作已过期，请重试', 'bad'); return false; }
     await new Promise((r) => setTimeout(r, 1000));
   }
-  toast('游戏还没处理完，稍后刷新看看', 'bad');
+  toast('游戏服仍在等待处理，稍后刷新核对状态', 'warn');
+  return false;
 }
 
 // ---------- 设置类页面通用 ----------
@@ -522,6 +610,7 @@ function talkView() {
     return ok;
   };
   return h('div', {},
+    localKnowledgeSection(),
     section({
       title: '回复长度与记忆',
       desc: 'AI 每次回复前会回看最近的聊天记录。回看得越多，越懂上下文，但每次调用更慢、更费钱。',
@@ -604,6 +693,31 @@ function connView() {
 
   const searchForm = settingsForm();
   const row = (key) => (S.specs[key] ? searchForm.row(specFor(key), settingValue(specFor(key))) : null);
+  const search = st.web_search || {};
+  const searchSwitch = row('web_search_enabled');
+  const searchMode = searchForm.row({
+    key: 'web_search_mode', kind: 'select', label: '搜索方式',
+    options: [['local', '仅本地资料'], ['native', '厂商原生搜索'], ['custom', '自定义搜索服务']],
+  }, search.mode || (setting('search_endpoint') ? 'custom' : 'local'));
+  const searchEndpoint = row('search_endpoint');
+  const searchState = h('p', { class: 'small muted' });
+  const refreshSearch = () => {
+    const mode = searchForm.value('web_search_mode');
+    if (searchEndpoint) searchEndpoint.hidden = mode !== 'custom';
+    if (mode === 'native') {
+      searchState.textContent = search.native_supported
+        ? (search.native_confirmed_at ? '当前连接已确认执行过搜索 · ' + relTime(search.native_confirmed_at) : '当前连接支持原生搜索，等待首次搜索确认。')
+        : '当前连接不支持原生搜索。首版支持 DeepSeek 官方接口的 deepseek-flash，当前连接仍可使用本地资料和聊天。';
+    } else if (mode === 'custom') {
+      searchState.textContent = searchForm.value('search_endpoint') ? '' : '填写兼容的搜索服务地址后可用。';
+    } else {
+      searchState.textContent = '';
+    }
+    searchState.hidden = !searchState.textContent;
+  };
+  const onSearchChange = searchForm.onChange;
+  searchForm.onChange = (form) => { onSearchChange?.(form); refreshSearch(); };
+  refreshSearch();
   const bridge = st.bridge || {};
   const queue = st.queue || {};
   return h('div', {},
@@ -613,7 +727,8 @@ function connView() {
       body: h('div', { class: 'stack' }, fields, result),
       foot: [testBtn, saveBtn],
     }),
-    section({ title: '联网搜索', body: h('div', {}, row('web_search_enabled'), h('details', { class: 'advanced' }, h('summary', {}, '高级'), h('div', {}, row('search_endpoint'), row('max_tool_rounds')))) }),
+    section({ id: 'ai-web-search', title: '联网搜索', body: h('div', {}, searchSwitch, searchMode, searchEndpoint, searchState,
+      h('details', { class: 'advanced' }, h('summary', {}, '高级'), row('max_tool_rounds'))) }),
     section({
       title: '紧急暂停', desc: '出现异常（比如 AI 胡言乱语、费用异常）时，一键让所有角色停止说话。',
       body: h('div', { class: 'row' }, emergency().stopped ? badge('已暂停', 'bad', true) : badge('正常运行', 'ok', true), h('span', { class: 'spacer' }),

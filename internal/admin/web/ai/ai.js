@@ -1745,8 +1745,8 @@ function renderSubscriptions() {
     if (channelsBox) channelsBox.textContent = '读取中…';
     return;
   }
-  const maps = (data.maps || []).filter((map) => (map.agents || []).indexOf(agent.key) >= 0);
-  const channels = (data.channels || []).filter((channel) => (channel.agents || []).indexOf(agent.key) >= 0);
+  const maps = (data.maps || []).filter((map) => (map.agent_keys || []).includes(agent.key));
+  const channels = (data.channels || []).filter((channel) => (channel.agent_keys || []).includes(agent.key));
   if (mapsBox) {
     mapsBox.textContent = maps.length
       ? ('普通范围：' + maps.map((map) => map.map_key === '*' ? '全局（任何频道）' : (map.label || map.map_key) + '（整张图）').join('、'))
@@ -1839,11 +1839,11 @@ function renderCapabilities() {
   const checked = view && Array.isArray(view.capabilities) ? view.capabilities : [];
   if (result) {
     if (!view) result.textContent = '能力状态待确认（刷新后仍为空请检查服务日志）';
-    else if (view.legacy) result.textContent = '旧工具快照：当前只读工具 ' + ((view.read_tools || []).length) + ' 个；保存后按所选能力生效（攻略能力对应完整只读集）。';
+    else if (view.legacy) result.textContent = '旧工具快照：当前只读工具 ' + ((view.read_tools || []).length) + ' 个。改用独立授权时请取消旧攻略授权。';
     else if (!view.present) result.textContent = '尚未保存能力：按缺配置处理，只保留基础私聊。';
   }
   if (list) {
-    const nodes = catalog.map((cap) => {
+    const nodes = catalog.filter((cap) => !cap.legacy || checked.includes(cap.id)).map((cap) => {
       const box = el('input', { type: 'checkbox', value: cap.id, 'data-cap': cap.id });
       box.checked = checked.indexOf(cap.id) >= 0;
       box.addEventListener('change', () => { S.capDirty = true; renderCapWarnings(); });
@@ -1853,7 +1853,7 @@ function renderCapabilities() {
       if (cap.write_tools && cap.write_tools.length) title.append(el('span', { class: 'pill', text: '写工具 ' + cap.write_tools.length }));
       const desc = el('div', { class: 'ai-cap-desc', text: cap.desc || '' });
       const warn = el('div', { class: 'ai-cap-warn', 'data-cap-warn': cap.id });
-      if (cap.requires_roundtable) warn.textContent = '依赖：需要同时具备「参加圆桌」；未满足时保存会被拒绝。';
+      if (cap.requires_roundtable) warn.textContent = '依赖：需要同时具备「参加多人对话」；未满足时保存会被拒绝。';
       if (cap.id === 'broadcast_catch') warn.textContent += ' 播报只在自己已提交渔获后发生。';
       return el('label', { class: 'ai-cap-item' }, el('div', {}, box), el('div', {}, title, desc, warn));
     });
@@ -1899,8 +1899,8 @@ function renderCapWarnings() {
   const warn = document.querySelector('[data-cap-warn="broadcast_catch"]');
   if (!broadcast || !warn) return;
   const conflict = broadcast.checked && roundtable && !roundtable.checked;
-  if (conflict) warn.textContent = '冲突：播报自己渔获需要先勾选「参加圆桌」；当前组合不会被保存。';
-  else warn.textContent = '依赖：需要同时具备「参加圆桌」；播报只在自己已提交渔获后发生。';
+  if (conflict) warn.textContent = '冲突：播报自己渔获需要先勾选「参加多人对话」；当前组合不会被保存。';
+  else warn.textContent = '依赖：需要同时具备「参加多人对话」；播报只在自己已提交渔获后发生。';
 }
 
 function readCapabilityChecks() {
@@ -1923,7 +1923,7 @@ async function saveCapabilities(retry) {
       renderCapWarnings();
       const warn = document.querySelector('[data-cap-warn="broadcast_catch"]');
       if (warn) warn.focus();
-      host.toast('「播报自己渔获」需要同时勾选「参加圆桌」', 'bad');
+      host.toast('「播报自己渔获」需要同时勾选「参加多人对话」', 'bad');
       return;
     }
   }

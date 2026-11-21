@@ -127,6 +127,8 @@ func NewServer(cfg config.Admin, db *store.DB, log logger, webFS fs.FS) *Server 
 	mux.HandleFunc("GET /api/ai/tools", auth(s.handleAITools))
 	mux.HandleFunc("GET /api/ai/capabilities", auth(s.handleAICapabilities))
 	mux.HandleFunc("POST /api/ai/capabilities", auth(s.handleAICapabilitiesSave))
+	mux.HandleFunc("GET /api/ai/local-knowledge", auth(s.handleAILocalKnowledgeGet))
+	mux.HandleFunc("POST /api/ai/local-knowledge", auth(s.handleAILocalKnowledgeSave))
 	// T-107：四维性格读取/保存与评分草稿。评分只回草稿，落库只经显式保存。
 	mux.HandleFunc("GET /api/ai/personality", auth(s.handleAIPersonalityGet))
 	mux.HandleFunc("POST /api/ai/personality", auth(s.handleAIPersonalitySave))

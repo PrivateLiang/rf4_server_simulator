@@ -18,6 +18,8 @@ import (
 	"unicode"
 
 	_ "modernc.org/sqlite"
+
+	"rf4server/internal/aiconfig"
 )
 
 var hanWords = regexp.MustCompile(`[\p{Han}]{2,}`)
@@ -82,6 +84,7 @@ type Knowledge struct {
 	static *sql.DB
 	client *http.Client
 	gate   EgressGate
+	local  func(context.Context) (aiconfig.LocalKnowledge, error)
 }
 
 // SetEgressGate 安装联网搜索出口前的判定；拒绝时 WebSearch 直接返回空串，
@@ -117,50 +120,6 @@ func (k *Knowledge) Close() error {
 		return k.static.Close()
 	}
 	return nil
-}
-
-// Internal 用问题里的中文片段检索内部静态资料，返回可直接注入提示词的文本。
-func (k *Knowledge) Internal(ctx context.Context, query string) string {
-	if k.static == nil {
-		return ""
-	}
-	likes := keywordsOf(query)
-	if len(likes) == 0 {
-		return ""
-	}
-	var b strings.Builder
-	for _, like := range likes {
-		rows, err := k.static.QueryContext(ctx, `
-			SELECT name_zh, loc FROM loc_fish WHERE name_zh LIKE ? LIMIT 3`, like)
-		if err == nil {
-			for rows.Next() {
-				var name, loc string
-				if rows.Scan(&name, &loc) == nil {
-					fmt.Fprintf(&b, "鱼种:%s 水域:%s\n", name, loc)
-				}
-			}
-			_ = rows.Close()
-		}
-		items, err := k.static.QueryContext(ctx, `
-			SELECT name_zh FROM item_catalog WHERE name_zh LIKE ? LIMIT 2`, like)
-		if err == nil {
-			for items.Next() {
-				var name string
-				if items.Scan(&name) == nil {
-					fmt.Fprintf(&b, "物品:%s\n", name)
-				}
-			}
-			_ = items.Close()
-		}
-		if b.Len() > 1000 {
-			break
-		}
-	}
-	s := b.String()
-	if r := []rune(s); len(r) > 1000 {
-		s = string(r[:1000])
-	}
-	return s
 }
 
 // sanitizeSearchQuery 在出网检索前去掉长数字与长标识符，避免把 UID、

@@ -25,7 +25,7 @@ if (!chromium) {
 }
 
 const ROOT = __dirname;
-const SHELL = fs.readFileSync(path.join(ROOT, 'web/index.html'), 'utf8');
+const SHELL = fs.readFileSync(path.join(ROOT, 'web/legacy.html'), 'utf8');
 const AI_INDEX = fs.readFileSync(path.join(ROOT, 'web/ai/index.html'), 'utf8');
 const AI_JS = fs.readFileSync(path.join(ROOT, 'web/ai/ai.js'), 'utf8');
 const AI_CSS = fs.readFileSync(path.join(ROOT, 'web/ai/ai.css'), 'utf8');
@@ -288,12 +288,12 @@ async function openPage(opts) {
       : {
         channel: 'nav1_03', agents: state.status.agents, subscribed: ['hutao'],
         channels: [
-          { name: 'nav1_03', label: '', count: 1, agents: ['hutao'] },
-          { name: 'nav1_04', label: '', count: 1, agents: ['hutao'] },
+          { name: 'nav1_03', label: '', count: 1, agents: ['胡桃'], agent_keys: ['hutao'] },
+          { name: 'nav1_04', label: '', count: 1, agents: ['胡桃'], agent_keys: ['hutao'] },
         ],
         maps: [
-          { map_key: '*', label: '全局', count: 1, agents: ['hutao'] },
-          { map_key: 'level_011_ladoga', label: '拉多加湖', count: 1, agents: ['hutao'] },
+          { map_key: '*', label: '全局', count: 1, agents: ['胡桃'], agent_keys: ['hutao'] },
+          { map_key: 'level_011_ladoga', label: '拉多加湖', count: 1, agents: ['胡桃'], agent_keys: ['hutao'] },
         ],
         channel_map_key: 'level_011_ladoga', channel_map_label: '拉多加湖',
       });

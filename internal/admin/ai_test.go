@@ -559,7 +559,7 @@ func TestAICapabilitiesHTTP(t *testing.T) {
 	if err := json.Unmarshal([]byte(body), &view); err != nil {
 		t.Fatalf("解析目录: %v", err)
 	}
-	if len(view.Catalog) != 6 || len(view.Tools) != 9 {
+	if len(view.Catalog) != 11 || len(view.Tools) != 12 {
 		t.Fatalf("目录 = %d 能力 / %d 工具", len(view.Catalog), len(view.Tools))
 	}
 	var companion *struct {
@@ -594,7 +594,7 @@ func TestAICapabilitiesHTTP(t *testing.T) {
 	if err := json.Unmarshal([]byte(body), &saved); err != nil {
 		t.Fatal(err)
 	}
-	if saved.Revision != 1 || len(saved.ReadTools) != 8 || len(saved.WriteTools) != 1 ||
+	if saved.Revision != 1 || strings.Join(saved.ReadTools, ",") != "map_vibe" || len(saved.WriteTools) != 1 ||
 		saved.State != "configured" {
 		t.Fatalf("保存回执 = %+v", saved)
 	}
@@ -643,7 +643,7 @@ func TestAICapabilityNotOverriddenByLegacyForm(t *testing.T) {
 		t.Fatalf("保存能力 = %d: %s", code, body)
 	}
 	code, body = capabilityRequest(t, ts, token, "POST", "/api/ai/agent/update",
-		`{"key":"companion","display":"AI 伙伴","role":"陪聊","prompt":"旧表单","tools":["map_vibe"]}`)
+		`{"key":"companion","display":"AI 伙伴","role":"陪聊","prompt":"旧表单","tools":["shop_price"]}`)
 	if code != 200 {
 		t.Fatalf("旧表单保存 = %d: %s", code, body)
 	}
@@ -667,7 +667,7 @@ func TestAICapabilityNotOverriddenByLegacyForm(t *testing.T) {
 		if a.Key != "companion" {
 			continue
 		}
-		if a.Revision != 1 || a.Legacy || len(a.ReadTools) != 8 || len(a.WriteTools) != 1 {
+		if a.Revision != 1 || a.Legacy || strings.Join(a.ReadTools, ",") != "map_vibe" || len(a.WriteTools) != 1 {
 			t.Fatalf("旧表单覆盖了新意图: %+v", a)
 		}
 		return
@@ -871,7 +871,7 @@ func TestT104CapabilitySaveAppliesThroughGS(t *testing.T) {
 	}
 	agent = t104GetAgent(t, ts, token, "companion")
 	if agent.Revision != 2 || agent.Generation != 2 || agent.State != "configured" ||
-		len(agent.ReadTools) != 8 || agent.ActorEnabled ||
+		strings.Join(agent.ReadTools, ",") != "map_vibe" || agent.ActorEnabled ||
 		agent.Availability != store.AICapabilityAvailabilityAvailable {
 		t.Fatalf("撤销后回读 = %+v", agent)
 	}
@@ -896,7 +896,7 @@ func TestT104CapabilitySaveAppliesThroughGS(t *testing.T) {
 		t.Fatal("旧后台写入未生效（测试前提不成立）")
 	}
 	agent = t104GetAgent(t, ts, token, "companion")
-	if agent.Revision != 2 || len(agent.WriteTools) != 0 || len(agent.ReadTools) != 8 ||
+	if agent.Revision != 2 || len(agent.WriteTools) != 0 || strings.Join(agent.ReadTools, ",") != "map_vibe" ||
 		agent.Availability != store.AICapabilityAvailabilityFailed {
 		t.Fatalf("旧后台写入改变了新集合 = %+v", agent)
 	}
@@ -945,7 +945,7 @@ func TestT104CapabilitySaveAppliesThroughGS(t *testing.T) {
 	agent = t104GetAgent(t, ts, token, "companion")
 	if agent.Revision != 3 || !agent.ActorEnabled ||
 		agent.Availability != store.AICapabilityAvailabilityAvailable ||
-		len(agent.ReadTools) != 8 {
+		strings.Join(agent.ReadTools, ",") != "map_vibe" {
 		t.Fatalf("补派后回读 = %+v", agent)
 	}
 	retryFinal, err := db.AIGetRuntimeCommand(context.Background(), retried.CommandID)

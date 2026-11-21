@@ -46,7 +46,7 @@ func TestNewRegistryRejectsInvalidEntries(t *testing.T) {
 		Parameters: json.RawMessage(`{"type":"object"}`), HandlerKey: "species_lookup",
 		TimeoutMS: 1000, MaxResultBytes: 100, AgentScoped: true,
 	}
-	handler := func(context.Context, *Knowledge, []string) string { return "" }
+	handler := func(context.Context, *Knowledge, string) (ToolResult, error) { return ToolResult{}, nil }
 
 	cases := []struct {
 		name    string
@@ -144,14 +144,15 @@ func TestRegistryDispatchLocalReads(t *testing.T) {
 }
 
 // 预注入保持原行为：按白名单顺序、跳过远程与未知、超过 1600 字截断。
-func TestRegistryRunKeepsOrderAndTruncation(t *testing.T) {
+func TestRegistryPrefetchKeepsOrderAndTruncation(t *testing.T) {
 	k := toolTestKnowledge(t)
 	r := mustRegistry(t, k)
-	out := r.Run(context.Background(), []string{"species_lookup", "fish_query", "not_a_tool"}, "河鲈在哪钓")
+	env := ToolEnv{Allowed: map[string]bool{"species_lookup": true}}
+	out := r.Prefetch(context.Background(), []string{"species_lookup", "fish_query", "not_a_tool"}, "河鲈在哪钓", env)
 	if !strings.Contains(out, "[species_lookup]") || strings.Contains(out, "[fish_query]") {
 		t.Fatalf("预注入顺序/过滤错误: %q", out)
 	}
-	if got := r.Run(context.Background(), []string{"species_lookup"}, ""); got != "" {
+	if got := r.Prefetch(context.Background(), []string{"species_lookup"}, "", env); got != "" {
 		t.Fatalf("空查询应无输出: %q", got)
 	}
 }
@@ -239,8 +240,8 @@ func TestRegistryDispatchWrite(t *testing.T) {
 	}
 }
 
-// 六个本地只读工具逐项等价：查询别名、排序、格式与截断都沿用改造前的字面结果。
-func TestLocalReadToolsKeepLegacyOutput(t *testing.T) {
+// 用与游戏静态目录一致的字段，逐项核对本地工具选到的资料与价格单位。
+func TestLocalReadToolsOutput(t *testing.T) {
 	db, err := sql.Open("sqlite", filepath.Join(t.TempDir(), "static-all.db"))
 	if err != nil {
 		t.Fatal(err)
@@ -256,10 +257,10 @@ func TestLocalReadToolsKeepLegacyOutput(t *testing.T) {
 		CREATE TABLE item_catalog(item_id TEXT, name TEXT, name_zh TEXT, kind TEXT, numeric_id INTEGER);
 		INSERT INTO item_catalog VALUES('rod_1','Rod','鲤竿','rod',1),
 		                             ('bait_dough','Dough','饵料','bait',2);
-		CREATE TABLE item_price(item_id TEXT, silver INTEGER);
-		INSERT INTO item_price VALUES('rod_1',120);
-		CREATE TABLE recipe(name TEXT, output_id TEXT);
-		INSERT INTO recipe VALUES('面团','bait_dough');`); err != nil {
+		CREATE TABLE item_price(item_id TEXT, silver INTEGER, gold INTEGER);
+		INSERT INTO item_price VALUES('rod_1',120,0);
+		CREATE TABLE recipe(recipe_id TEXT, name TEXT, output_id TEXT);
+		INSERT INTO recipe VALUES('dough','面团','bait_dough');`); err != nil {
 		t.Fatalf("建静态表: %v", err)
 	}
 	r := mustRegistry(t, &Knowledge{static: db})
@@ -276,9 +277,9 @@ func TestLocalReadToolsKeepLegacyOutput(t *testing.T) {
 		{"species_lookup", `{"query":"河鲈"}`, "鱼种:河鲈 水域:lake_a\n"},
 		{"bait_pref", `{"query":"红虫"}`, "鱼:河鲈 饵:红虫\n"},
 		{"spot_lookup", `{"fish":"河鲈"}`, "水域:lake_a 点位:东岸\n"},
-		{"item_lookup", `{"query":"鲤竿"}`, "物品:鲤竿 id:rod_1\n"},
-		{"shop_price", `{"query":"鲤竿"}`, "商品:鲤竿 银币:120\n"},
-		{"recipe_lookup", `{"query":"面团"}`, "配方:面团 产物:饵料\n"},
+		{"item_lookup", `{"query":"鲤竿"}`, "物品：鲤竿（ID：rod_1）"},
+		{"shop_price", `{"query":"鲤竿"}`, "鲤竿 静态参考价：1.20 银币。实际售价与库存以游戏商店为准。"},
+		{"recipe_lookup", `{"query":"面团"}`, "配方：面团，产物：饵料\n"},
 	}
 	for _, c := range cases {
 		res, err := r.Dispatch(ctx, c.tool, c.args, env)

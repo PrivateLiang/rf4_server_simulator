@@ -2,6 +2,8 @@
 
 Status: done
 
+资料授权拆分、旧只读子集兼容和本地检索的现行行为见 [AI 资料能力与本地术语](../ai-knowledge-scopes/spec.md)。
+
 ## Problem Statement
 
 角色的「能做什么」原先散在三处：`internal/aibridge/tools.go` 的注册表、`runner.go`

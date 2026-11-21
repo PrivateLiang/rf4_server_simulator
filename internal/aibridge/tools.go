@@ -9,7 +9,7 @@ package aibridge
 //
 // 边界（T-104）：
 //   - 模型只看到 Name/Description/Parameters 三个公开字段；
-//   - 六个本地只读工具保持原查询、别名、排序与截断行为；
+//   - 本地工具与预取使用同一份授权和错误口径；
 //   - fish_query / map_vibe 是 gs_read，走 ai_tool_job，不进写队列；
 //   - actor_target_suggest 是当前唯一写工具，只投递命令，不由 BR 应用；
 //   - 未知 / 禁用 / 无权 / 参数不合法返回可区分的错误，不返回空串。
@@ -17,6 +17,7 @@ package aibridge
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -50,7 +51,8 @@ type ToolResult struct {
 	Reason    string `json:"reason,omitempty"`
 	SampledAt int64  `json:"sampled_at,omitempty"`
 	// Applied 只在写回执里出现：受理时必须是 false（等待游戏服确认）。
-	Applied *bool `json:"applied,omitempty"`
+	Applied   *bool `json:"applied,omitempty"`
+	shopQuote *shopQuote
 }
 
 // ToolError 带稳定 reason code，便于日志、测试和模型侧区分失败原因。
@@ -75,15 +77,16 @@ var (
 // ToolEnv 是受信调用环境：身份、代次、允许集合与两个跨进程出口都由 Runner 注入，
 // 模型无法影响其中任何字段。
 type ToolEnv struct {
-	AgentKey   string
-	TaskID     int64
-	CallID     string
-	Generation int64
-	Revision   int64
-	TaskText   string
-	TaskLoc    string
-	Deadline   time.Time
-	Allowed    map[string]bool
+	AgentKey         string
+	TaskID           int64
+	CallID           string
+	Generation       int64
+	Revision         int64
+	TaskText         string
+	TaskLoc          string
+	Deadline         time.Time
+	Allowed          map[string]bool
+	observeShopQuote func(*shopQuote)
 	// Active 是本次任务的原意图判定（急停 + 原代次）。
 	Active func(context.Context) bool
 	// Recheck 在每次执行前重新读取当前授权。任务开始时的允许集合只决定
@@ -104,7 +107,14 @@ var aiToolLocalExecHookForTest func(name string)
 type toolArgs map[string]string
 
 // toolHandler 只服务 local 路由。
-type toolHandler func(ctx context.Context, k *Knowledge, keywords []string) string
+type toolHandler func(ctx context.Context, k *Knowledge, query string) (ToolResult, error)
+
+func textTool(fn func(context.Context, *Knowledge, string) (string, error)) toolHandler {
+	return func(ctx context.Context, k *Knowledge, query string) (ToolResult, error) {
+		text, err := fn(ctx, k, query)
+		return ToolResult{Data: text}, err
+	}
+}
 
 // registryEntry 是一个工具的完整声明。
 type registryEntry struct {
@@ -193,6 +203,9 @@ func (r *Registry) add(e registryEntry) error {
 func newToolEntries() []registryEntry {
 	queryParams := json.RawMessage(`{"type":"object","properties":{"query":{"type":"string","description":"中文名或关键词"}}}`)
 	return []registryEntry{
+		localNotesEntry(aiconfig.ToolFishingNotes, aiconfig.KnowledgeFishing, "查找本地垂钓心得及来源。", queryParams),
+		localNotesEntry(aiconfig.ToolShopNotes, aiconfig.KnowledgeShop, "查找本地装备与商店心得及来源。", queryParams),
+		localNotesEntry(aiconfig.ToolCraftNotes, aiconfig.KnowledgeCraft, "查找本地制作心得及来源。", queryParams),
 		{
 			spec: ToolSpec{
 				Name: aiconfig.ToolSpeciesLookup, Description: "查鱼种出现在哪些水域。",
@@ -200,7 +213,7 @@ func newToolEntries() []registryEntry {
 				AgentScoped: true, HandlerKey: aiconfig.ToolSpeciesLookup,
 				TimeoutMS: 3000, MaxResultBytes: 800,
 			},
-			handler: toolSpecies,
+			handler: textTool(toolSpecies),
 		},
 		{
 			spec: ToolSpec{
@@ -209,7 +222,7 @@ func newToolEntries() []registryEntry {
 				AgentScoped: true, HandlerKey: aiconfig.ToolBaitPref,
 				TimeoutMS: 3000, MaxResultBytes: 800,
 			},
-			handler: toolBaitPref,
+			handler: textTool(toolBaitPref),
 		},
 		{
 			spec: ToolSpec{
@@ -218,20 +231,20 @@ func newToolEntries() []registryEntry {
 				AgentScoped: true, HandlerKey: aiconfig.ToolSpotLookup,
 				TimeoutMS: 3000, MaxResultBytes: 800,
 			},
-			handler: toolSpot,
+			handler: textTool(toolSpot),
 		},
 		{
 			spec: ToolSpec{
-				Name: aiconfig.ToolItemLookup, Description: "按中文名查装备与物品。",
+				Name: aiconfig.ToolItemLookup, Description: "按正式名、社区简称、型号或 ID 查装备与物品。",
 				Parameters: queryParams, Kind: ToolKindRead, Route: ToolRouteLocal,
 				AgentScoped: true, HandlerKey: aiconfig.ToolItemLookup,
 				TimeoutMS: 3000, MaxResultBytes: 800,
 			},
-			handler: toolItem,
+			handler: textTool(toolItem),
 		},
 		{
 			spec: ToolSpec{
-				Name: aiconfig.ToolShopPrice, Description: "查商品价格与库存。",
+				Name: aiconfig.ToolShopPrice, Description: "查装备或道具的静态参考价，实时售价与库存以游戏商店为准。",
 				Parameters: queryParams, Kind: ToolKindRead, Route: ToolRouteLocal,
 				AgentScoped: true, HandlerKey: aiconfig.ToolShopPrice,
 				TimeoutMS: 3000, MaxResultBytes: 800,
@@ -245,7 +258,7 @@ func newToolEntries() []registryEntry {
 				AgentScoped: true, HandlerKey: aiconfig.ToolRecipeLookup,
 				TimeoutMS: 3000, MaxResultBytes: 800,
 			},
-			handler: toolRecipe,
+			handler: textTool(toolRecipe),
 		},
 		{
 			spec: ToolSpec{
@@ -344,23 +357,27 @@ func (r *Registry) Dispatch(ctx context.Context, name, rawArgs string, env ToolE
 	}
 	switch entry.spec.Route {
 	case ToolRouteLocal:
-		if r.knowledge == nil || r.knowledge.static == nil {
-			return ToolResult{Status: "unavailable", Reason: "static_unavailable"},
-				fmt.Errorf("%w: 静态库未挂载", ErrToolUnavailable)
-		}
 		q := queryOf(args)
 		if q == "" {
-			// 旧行为：没有查询词就不查静态库，也不算错误。
 			return ToolResult{Status: "ok", SampledAt: time.Now().Unix()}, nil
 		}
 		if aiToolLocalExecHookForTest != nil {
 			aiToolLocalExecHookForTest(name)
 		}
-		out := entry.handler(ctx, r.knowledge, keywordsOf(q))
-		return ToolResult{
-			Status: "ok", Data: trimRunes(out, entry.spec.MaxResultBytes),
-			SampledAt: time.Now().Unix(),
-		}, nil
+		localCtx, cancel := context.WithTimeout(ctx, time.Duration(entry.spec.TimeoutMS)*time.Millisecond)
+		defer cancel()
+		out, err := entry.handler(localCtx, r.knowledge, q)
+		if err != nil {
+			return ToolResult{Status: "unavailable", Reason: ErrToolUnavailable.Code},
+				fmt.Errorf("%w: %v", ErrToolUnavailable, err)
+		}
+		out.Status = "ok"
+		if out.Data == "" {
+			out.Status = "not_found"
+		}
+		out.Data = trimRunes(out.Data, entry.spec.MaxResultBytes)
+		out.SampledAt = time.Now().Unix()
+		return out, nil
 	case ToolRouteGSRead:
 		if env.RemoteRead == nil {
 			return ToolResult{Status: "unavailable", Reason: ErrToolUnavailable.Code}, ErrToolUnavailable
@@ -450,26 +467,27 @@ func parseToolArgs(raw string) (toolArgs, error) {
 	return out, nil
 }
 
-// Run 保留改造前的「预注入一次工具结果」的行为：只跑本地只读工具，
-// 按白名单顺序拼 [name] 段，超过 1600 字截断。
-func (r *Registry) Run(ctx context.Context, names []string, query string) string {
-	if r == nil || r.knowledge == nil || r.knowledge.static == nil {
+// Prefetch runs only previously authorized local tools, through the same
+// permission check as a model-initiated call.
+func (r *Registry) Prefetch(ctx context.Context, names []string, query string, env ToolEnv) string {
+	if r == nil || strings.TrimSpace(query) == "" {
 		return ""
 	}
-	keywords := keywordsOf(query)
-	if len(keywords) == 0 {
-		return ""
-	}
+	args, _ := json.Marshal(toolArgs{"query": trimRunes(query, 240)})
 	var b strings.Builder
 	for _, name := range names {
 		e, ok := r.entries[name]
 		if !ok || e.spec.Route != ToolRouteLocal {
 			continue
 		}
-		if out := e.handler(ctx, r.knowledge, keywords); out != "" {
-			fmt.Fprintf(&b, "[%s]\n%s\n", name, out)
+		res, err := r.Dispatch(ctx, name, string(args), env)
+		if err == nil && res.shopQuote != nil && env.observeShopQuote != nil {
+			env.observeShopQuote(res.shopQuote)
 		}
-		if b.Len() > 1600 {
+		if err == nil && res.Data != "" {
+			fmt.Fprintf(&b, "[%s]\n%s\n", name, res.Data)
+		}
+		if b.Len() >= 1600 {
 			break
 		}
 	}
@@ -504,91 +522,68 @@ func keywordsOf(query string) []string {
 	return out
 }
 
-func scanPairs(ctx context.Context, k *Knowledge, query string, args []any, format func(a, b string) string, limit int) string {
+func scanPairs(ctx context.Context, k *Knowledge, query string, args []any) ([][2]string, error) {
+	if k == nil || k.static == nil {
+		return nil, errors.New("静态资料库未挂载")
+	}
 	rows, err := k.static.QueryContext(ctx, query, args...)
 	if err != nil {
-		return ""
+		return nil, err
 	}
 	defer rows.Close()
-	var b strings.Builder
-	n := 0
-	for rows.Next() && n < limit {
-		var a, c string
-		if rows.Scan(&a, &c) == nil {
-			b.WriteString(format(a, c))
-			n++
+	var out [][2]string
+	for rows.Next() {
+		var pair [2]string
+		if err := rows.Scan(&pair[0], &pair[1]); err != nil {
+			return nil, err
+		}
+		out = append(out, pair)
+	}
+	return out, rows.Err()
+}
+
+func searchPairs(ctx context.Context, k *Knowledge, query, statement, format string, repeats int) (string, error) {
+	var out strings.Builder
+	seen := map[[2]string]bool{}
+	for _, kw := range keywordsOf(query) {
+		args := make([]any, repeats)
+		for i := range args {
+			args[i] = kw
+		}
+		rows, err := scanPairs(ctx, k, statement, args)
+		if err != nil {
+			return "", err
+		}
+		for _, pair := range rows {
+			if !seen[pair] {
+				fmt.Fprintf(&out, format, pair[0], pair[1])
+				seen[pair] = true
+			}
 		}
 	}
-	return b.String()
+	return out.String(), nil
 }
 
-func toolSpecies(ctx context.Context, k *Knowledge, kws []string) string {
-	var out strings.Builder
-	for _, kw := range kws {
-		out.WriteString(scanPairs(ctx, k,
-			`SELECT name_zh, loc FROM loc_fish WHERE name_zh LIKE ? LIMIT 4`,
-			[]any{kw}, func(a, b string) string { return fmt.Sprintf("鱼种:%s 水域:%s\n", a, b) }, 4))
-	}
-	return out.String()
+func toolSpecies(ctx context.Context, k *Knowledge, query string) (string, error) {
+	return searchPairs(ctx, k, query,
+		`SELECT DISTINCT name_zh, loc FROM loc_fish WHERE name_zh LIKE ? ORDER BY name_zh, loc LIMIT 4`,
+		"鱼种:%s 水域:%s\n", 1)
 }
 
-func toolBaitPref(ctx context.Context, k *Knowledge, kws []string) string {
-	var out strings.Builder
-	for _, kw := range kws {
-		out.WriteString(scanPairs(ctx, k,
-			`SELECT DISTINCT COALESCE(lf.name_zh, p.fish_key), p.bait_zh
-			 FROM fish_bait_pref p
-			 LEFT JOIN loc_fish lf ON lf.fish_key=p.fish_key
-			 WHERE p.bait_zh LIKE ? LIMIT 4`,
-			[]any{kw}, func(a, b string) string { return fmt.Sprintf("鱼:%s 饵:%s\n", a, b) }, 4))
-	}
-	return out.String()
+func toolBaitPref(ctx context.Context, k *Knowledge, query string) (string, error) {
+	return searchPairs(ctx, k, query,
+		`SELECT DISTINCT COALESCE(lf.name_zh, p.fish_key), p.bait_zh
+		 FROM fish_bait_pref p LEFT JOIN loc_fish lf ON lf.fish_key=p.fish_key
+		 WHERE lf.name_zh LIKE ? OR p.bait_zh LIKE ?
+		 ORDER BY 1, 2 LIMIT 4`, "鱼:%s 饵:%s\n", 2)
 }
 
-func toolSpot(ctx context.Context, k *Knowledge, kws []string) string {
-	var out strings.Builder
-	for _, kw := range kws {
-		out.WriteString(scanPairs(ctx, k,
-			`SELECT s.loc, s.spot FROM spot_fish s
-			 LEFT JOIN loc_fish lf ON lf.fish_key=s.fish_key AND lf.loc=s.loc
-			 WHERE s.fish_key LIKE ? OR s.loc LIKE ? OR lf.name_zh LIKE ? LIMIT 4`,
-			[]any{kw, kw, kw}, func(a, b string) string { return fmt.Sprintf("水域:%s 点位:%s\n", a, b) }, 4))
-	}
-	return out.String()
-}
-
-func toolItem(ctx context.Context, k *Knowledge, kws []string) string {
-	var out strings.Builder
-	for _, kw := range kws {
-		out.WriteString(scanPairs(ctx, k,
-			`SELECT name_zh, item_id FROM item_catalog WHERE name_zh LIKE ? LIMIT 4`,
-			[]any{kw}, func(a, b string) string { return fmt.Sprintf("物品:%s id:%s\n", a, b) }, 4))
-	}
-	return out.String()
-}
-
-func toolShopPrice(ctx context.Context, k *Knowledge, kws []string) string {
-	var out strings.Builder
-	for _, kw := range kws {
-		out.WriteString(scanPairs(ctx, k,
-			`SELECT COALESCE(c.name_zh, p.item_id), CAST(p.silver AS TEXT)
-			 FROM item_price p LEFT JOIN item_catalog c ON c.item_id=p.item_id
-			 WHERE p.item_id LIKE ? OR c.name_zh LIKE ? LIMIT 4`,
-			[]any{kw, kw}, func(a, b string) string { return fmt.Sprintf("商品:%s 银币:%s\n", a, b) }, 4))
-	}
-	return out.String()
-}
-
-func toolRecipe(ctx context.Context, k *Knowledge, kws []string) string {
-	var out strings.Builder
-	for _, kw := range kws {
-		out.WriteString(scanPairs(ctx, k,
-			`SELECT r.name, COALESCE(c.name_zh, r.output_id)
-			 FROM recipe r LEFT JOIN item_catalog c ON c.item_id=r.output_id
-			 WHERE r.name LIKE ? LIMIT 4`,
-			[]any{kw}, func(a, b string) string { return fmt.Sprintf("配方:%s 产物:%s\n", a, b) }, 4))
-	}
-	return out.String()
+func toolSpot(ctx context.Context, k *Knowledge, query string) (string, error) {
+	return searchPairs(ctx, k, query,
+		`SELECT DISTINCT s.loc, s.spot FROM spot_fish s
+		 LEFT JOIN loc_fish lf ON lf.fish_key=s.fish_key AND lf.loc=s.loc
+		 WHERE s.fish_key LIKE ? OR s.loc LIKE ? OR lf.name_zh LIKE ?
+		 ORDER BY 1, 2 LIMIT 4`, "水域:%s 点位:%s\n", 3)
 }
 
 // firstFishKeyword 从自然语言里取第一个中文 2 字片段作为鱼名，

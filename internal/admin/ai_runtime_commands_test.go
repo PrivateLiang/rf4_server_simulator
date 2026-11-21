@@ -17,6 +17,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -248,6 +249,109 @@ func TestAIRuntimeCommandAdminChannelIsIntent(t *testing.T) {
 	if n := adminCommandCount(t, db); n != 1 {
 		t.Fatalf("地图订阅不应产生 runtime 命令，命令数 = %d", n)
 	}
+}
+
+func TestAIChannelMembershipReadbackAfterRevive(t *testing.T) {
+	db := adminRuntimeDB(t)
+	srv := adminRuntimeServer(t, db)
+	t.Cleanup(t104StartGSRuntime(t, db))
+	ctx := t.Context()
+	const channel = "scope-room"
+	agent := store.AIAgent{Key: "test-fisher", Display: "同名钓友"}
+	peer := store.AIAgent{Key: "test-peer", Display: agent.Display}
+	for _, a := range []store.AIAgent{agent, peer} {
+		if _, _, err := db.AICreateAgent(ctx, a, "[]"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := db.AIUpsertChannel(ctx, channel); err != nil {
+		t.Fatal(err)
+	}
+
+	apply := func(path, payload string) {
+		t.Helper()
+		rec := adminPost(t, srv, path, payload)
+		var accepted struct {
+			ID int64 `json:"command_id"`
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), &accepted); err != nil || rec.Code != http.StatusAccepted || accepted.ID == 0 {
+			t.Fatalf("入队 %s: HTTP %d %s", path, rec.Code, rec.Body.String())
+		}
+		if cmd := t104WaitCommand(t, db, accepted.ID); cmd.Status != store.AIRuntimeStatusApplied {
+			t.Fatalf("应用 %s: %s (%s)", path, cmd.Status, cmd.Reason)
+		}
+	}
+	type members struct {
+		Agents []string `json:"agents"`
+		Keys   []string `json:"agent_keys"`
+		Count  int      `json:"count"`
+	}
+	type channelView struct {
+		Name string `json:"name"`
+		members
+	}
+	type mapView struct {
+		Key string `json:"map_key"`
+		members
+	}
+	read := func(wantChannelKeys, wantMapKeys []string) {
+		t.Helper()
+		rec := httptest.NewRecorder()
+		srv.handleAIChannels(rec, httptest.NewRequest("GET", "/api/ai/channels?name="+channel, nil))
+		var view struct {
+			Channels []channelView `json:"channels"`
+			Maps     []mapView     `json:"maps"`
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), &view); err != nil || rec.Code != http.StatusOK {
+			t.Fatalf("读回范围: HTTP %d %s", rec.Code, rec.Body.String())
+		}
+		assertMembers := func(label string, got members, want []string) {
+			t.Helper()
+			names := make([]string, len(want))
+			for i := range names {
+				names[i] = agent.Display
+			}
+			if got.Keys == nil || !slices.Equal(got.Keys, want) || !slices.Equal(got.Agents, names) || got.Count != len(want) {
+				t.Fatalf("%s 的成员 = %+v，期望标识 %v、名称 %v", label, got, want, names)
+			}
+		}
+		channelIndex := slices.IndexFunc(view.Channels, func(c channelView) bool { return c.Name == channel })
+		mapIndex := slices.IndexFunc(view.Maps, func(m mapView) bool { return m.Key == "*" })
+		if channelIndex < 0 || mapIndex < 0 {
+			t.Fatalf("缺少频道或全局范围: %s", rec.Body.String())
+		}
+		assertMembers(channel, view.Channels[channelIndex].members, wantChannelKeys)
+		assertMembers("*", view.Maps[mapIndex].members, wantMapKeys)
+	}
+
+	const add = `{"channel":"scope-room","agent":"test-fisher","enabled":true}`
+	const remove = `{"channel":"scope-room","agent":"test-fisher","enabled":false}`
+	apply("/api/ai/channel", add)
+	apply("/api/ai/channel", `{"channel":"scope-room","agent":"test-peer","enabled":true}`)
+	rec := adminPost(t, srv, "/api/ai/channel", `{"map_key":"*","agent":"test-fisher","enabled":true}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("订阅全局: HTTP %d %s", rec.Code, rec.Body.String())
+	}
+	read([]string{agent.Key, peer.Key}, []string{agent.Key})
+	if _, err := db.SQL.Exec(`UPDATE ai_channel_agent SET priority=17,cooldown_ms=12000
+		WHERE channel=? AND agent_id=(SELECT id FROM ai_agent WHERE key=?)`, channel, agent.Key); err != nil {
+		t.Fatal(err)
+	}
+	apply("/api/ai/agent/delete", `{"key":"test-fisher"}`)
+	if _, revived, err := db.AICreateAgent(ctx, agent, "[]"); err != nil || !revived {
+		t.Fatalf("恢复角色: revived=%v err=%v", revived, err)
+	}
+	read([]string{peer.Key}, []string{agent.Key})
+	apply("/api/ai/channel", add)
+	read([]string{agent.Key, peer.Key}, []string{agent.Key})
+	var priority, cooldown int
+	if err := db.SQL.QueryRow(`SELECT priority,cooldown_ms FROM ai_channel_agent
+		WHERE channel=? AND agent_id=(SELECT id FROM ai_agent WHERE key=?)`, channel, agent.Key).
+		Scan(&priority, &cooldown); err != nil || priority != 17 || cooldown != 12000 {
+		t.Fatalf("恢复频道的优先级和冷却: %d, %d, %v", priority, cooldown, err)
+	}
+	apply("/api/ai/channel", remove)
+	read([]string{peer.Key}, []string{agent.Key})
 }
 
 // TestAIRuntimeCommandAdminStaleGenerationPreserved：页面上报的过期代次原样入队，

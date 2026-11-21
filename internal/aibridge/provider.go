@@ -66,6 +66,7 @@ type Message struct {
 	ToolCallID string     `json:"tool_call_id,omitempty"`
 	ToolCalls  []ToolCall `json:"tool_calls,omitempty"`
 	Reasoning  string     `json:"reasoning_content,omitempty"`
+	shopFocus  *shopFocus
 }
 
 // ThinkingConfig 是统一的思考开关与强度档。
@@ -84,10 +85,12 @@ type ChatRequest struct {
 }
 
 type ChatResponse struct {
-	Text             string
-	ToolCalls        []ToolCall
-	ReasoningContent string
-	RawUsage         string // 仅排障，不用于计费
+	Text               string
+	ToolCalls          []ToolCall
+	ReasoningContent   string
+	RawUsage           string // 仅排障，不用于计费
+	webSearchConfirmed bool
+	webSources         []string
 }
 
 // Provider 是所有模型厂商必须实现的接口。
@@ -268,6 +271,7 @@ type OpenAICompatProvider struct {
 	thinkingMap map[string]json.RawMessage
 	gate        EgressGate
 	base        http.RoundTripper // nil = 生产安全 Transport；仅测试注入本地 fixture
+	revision    int64
 }
 
 // NewProvider 构造 Provider。ModelID 或 APIKey 为空时返回明确错误，由上层降级。
@@ -349,6 +353,10 @@ func (p *OpenAICompatProvider) endpoint() string {
 }
 
 func (p *OpenAICompatProvider) Chat(ctx context.Context, r ChatRequest) (ChatResponse, error) {
+	return p.chat(ctx, r, false, nil)
+}
+
+func (p *OpenAICompatProvider) chat(ctx context.Context, r ChatRequest, nativeSearch bool, searchGate EgressGate) (ChatResponse, error) {
 	body := map[string]any{
 		"model":      p.spec.ModelID,
 		"messages":   r.Messages,
@@ -393,12 +401,25 @@ func (p *OpenAICompatProvider) Chat(ctx context.Context, r ChatRequest) (ChatRes
 	} else if level == "off" {
 		body["thinking"] = map[string]string{"type": "disabled"}
 	}
+	if nativeSearch {
+		// Use the official search-only wire shape, independent of provider
+		// thinking overrides and the game's function tools.
+		body = map[string]any{
+			"model": p.spec.ModelID, "messages": r.Messages, "max_tokens": r.MaxTokens, "stream": false,
+			"tools":    []map[string]string{{"type": "deepseek_web_search"}},
+			"thinking": map[string]string{"type": "disabled"},
+		}
+	}
 
 	payload, err := json.Marshal(body)
 	if err != nil {
 		return ChatResponse{}, err
 	}
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, p.endpoint(), bytes.NewReader(payload))
+	endpoint := p.endpoint()
+	if nativeSearch {
+		endpoint = "https://api.deepseek.com/chat/completions"
+	}
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(payload))
 	if err != nil {
 		return ChatResponse{}, err
 	}
@@ -409,15 +430,23 @@ func (p *OpenAICompatProvider) Chat(ctx context.Context, r ChatRequest) (ChatRes
 		httpReq.Header.Set("Authorization", "Bearer "+p.spec.APIKey)
 	}
 
-	// 真正的出口检查放在发送前最后一刻：预检之后撤销授权、换目的地
-	// 或触发急停，都在这里拦住，不依赖调用方更早的判断。
+	client := p.client
+	if nativeSearch {
+		if err := searchGate(ctx); err != nil {
+			return ChatResponse{}, err
+		}
+		// Native capability is tied to the verified official endpoint.
+		direct := *client
+		direct.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+		client = &direct
+	}
+	// 真正的出口检查放在发送前最后一刻，复核当前配置和急停原意图。
 	if p.gate != nil {
 		if err := p.gate(ctx); err != nil {
 			return ChatResponse{}, err
 		}
 	}
-
-	resp, err := p.client.Do(httpReq)
+	resp, err := client.Do(httpReq)
 	if err != nil {
 		return ChatResponse{}, fmt.Errorf("ai: 请求厂商失败: %w", err)
 	}
@@ -448,6 +477,8 @@ func (p *OpenAICompatProvider) Chat(ctx context.Context, r ChatRequest) (ChatRes
 						Arguments string `json:"arguments"`
 					} `json:"function"`
 				} `json:"tool_calls"`
+				NativeCalls       json.RawMessage `json:"server_tool_calls"`
+				NativeAnnotations json.RawMessage `json:"annotations"`
 			} `json:"message"`
 		} `json:"choices"`
 		Usage json.RawMessage `json:"usage"`
@@ -466,8 +497,18 @@ func (p *OpenAICompatProvider) Chat(ctx context.Context, r ChatRequest) (ChatRes
 	if len(calls) == 0 && strings.TrimSpace(m.Content) == "" {
 		return ChatResponse{}, errors.New("ai: 厂商响应无文本内容")
 	}
-	return ChatResponse{
+	result := ChatResponse{
 		Text: m.Content, ToolCalls: calls,
 		ReasoningContent: m.ReasoningContent, RawUsage: string(out.Usage),
-	}, nil
+	}
+	if nativeSearch {
+		var meta nativeSearchMetadata
+		if json.Unmarshal(m.NativeCalls, &meta.Steps) == nil && meta.confirmed() {
+			result.webSearchConfirmed = true
+			if json.Unmarshal(m.NativeAnnotations, &meta.Annotations) == nil {
+				result.webSources = meta.sources()
+			}
+		}
+	}
+	return result, nil
 }

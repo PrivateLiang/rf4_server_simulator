@@ -81,7 +81,8 @@ var AIModules = []AIModule{
 // fishing: sim/rare/talk/inject），不改变存储与校验语义。
 var AISettingSpecs = []SettingSpec{
 	// ---- conn：连接与密钥 ----
-	{Key: "web_search_enabled", Module: "conn", Group: "search", Label: "联网搜索", Hint: "默认关，只查内部资料；打开后需填检索端点", Kind: KindBool, Def: "0"},
+	{Key: aiconfig.KeyWebSearchEnabled, Module: "conn", Group: "search", Label: "联网搜索", Hint: "全局允许选择的搜索方式；角色还需单独获准。", Kind: KindBool, Def: "0"},
+	{Key: aiconfig.KeySearchMode, Module: "conn", Group: "search", Label: "搜索方式", Kind: KindString, Def: "", Hidden: true},
 	{Key: "emergency_stop", Module: "conn", Group: "safety", Label: "紧急停止", Hint: "切断所有模型调用，优先级最高", Kind: KindBool, Def: aiconfig.DefaultEmergencyStop},
 	{Key: "search_endpoint", Module: "conn", Group: "search", Label: "检索端点", Hint: "联网搜索打开时使用的外部检索地址", Kind: KindString, Def: "", Advanced: true},
 	{Key: "max_tool_rounds", Module: "conn", Group: "search", Label: "工具轮数", Hint: "单次请求最多几轮 function calling", Kind: KindInt, Def: "2", Min: 1, Max: 4, Advanced: true},

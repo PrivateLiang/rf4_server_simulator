@@ -34,16 +34,16 @@ const (
 
 // Runner 是 aibridge 的主循环。
 type Runner struct {
-	db        *store.DB
-	knowledge *Knowledge
-	registry  *Registry
-	sessions  *SessionStore
-	cfg       config.AI
-	masterKey []byte
-	log       *slog.Logger
-	sem       chan struct{}
-	lastSweep time.Time
-	lastPrune time.Time
+	db            *store.DB
+	knowledge     *Knowledge
+	registry      *Registry
+	sessions      *SessionStore
+	cfg           config.AI
+	masterKey     []byte
+	log           *slog.Logger
+	maxConcurrent int
+	lastSweep     time.Time
+	lastPrune     time.Time
 
 	// providerTransport 仅测试注入本地 fixture；生产为 nil（安全 Transport）。
 	providerTransport http.RoundTripper
@@ -74,7 +74,7 @@ func NewRunner(db *store.DB, k *Knowledge, cfg config.AI, masterKey []byte, log 
 	r := &Runner{
 		db: db, knowledge: k, registry: reg, sessions: NewSessionStore(),
 		cfg: cfg, masterKey: masterKey,
-		log: log, sem: make(chan struct{}, n),
+		log: log, maxConcurrent: n,
 		providerTransport: runnerProviderTransport,
 	}
 	// 联网搜索也是出网出口：与模型调用共用同一份判定（当前急停 + 原意图）。
@@ -83,6 +83,10 @@ func NewRunner(db *store.DB, k *Knowledge, cfg config.AI, masterKey []byte, log 
 		k.SetEgressGate(func(ctx context.Context) error {
 			return r.egressGateForTask(ctx)
 		})
+		k.local = func(ctx context.Context) (aiconfig.LocalKnowledge, error) {
+			snap, err := db.AIGetLocalKnowledge(ctx)
+			return snap.Document, err
+		}
 	}
 	return r
 }
@@ -135,8 +139,11 @@ func (r *Runner) Loop(ctx context.Context) {
 
 func (r *Runner) pump(ctx context.Context) {
 	r.sweep(ctx)
-	var wg sync.WaitGroup
-	for i := 0; i < cap(r.sem); i++ {
+	// Claim in queue order and run each private conversation in order within
+	// the batch. Unrelated conversations still run independently.
+	var batches [][]*store.AITask
+	private := make(map[string]int)
+	for i := 0; i < r.maxConcurrent; i++ {
 		t, ok, err := r.db.AIPopTask(ctx)
 		if err != nil {
 			r.log.Warn("AI 任务读取失败", "err", err)
@@ -145,23 +152,37 @@ func (r *Runner) pump(ctx context.Context) {
 		if !ok {
 			break
 		}
-		r.sem <- struct{}{}
+		if t.Kind == "dm" {
+			key := sessionKey(t)
+			if index, exists := private[key]; exists {
+				batches[index] = append(batches[index], t)
+				continue
+			}
+			private[key] = len(batches)
+		}
+		batches = append(batches, []*store.AITask{t})
+	}
+	var wg sync.WaitGroup
+	for _, batch := range batches {
 		wg.Add(1)
-		go func(task *store.AITask) {
+		go func() {
 			defer wg.Done()
-			defer func() { <-r.sem }()
-			// 单个任务的坏数据不能带崩整个桥接进程。
-			defer func() {
-				if rec := recover(); rec != nil {
-					r.log.Error("AI 任务异常", "id", task.ID, "panic", rec)
-					// 按本次认领的 attempt 结束：任务若已被回收重领，旧尝试不得改新状态。
-					_ = r.db.AIFinishTaskWithReason(context.Background(), task.ID, task.Attempt, "fallback", "")
-				}
-			}()
-			r.handle(ctx, task)
-		}(t)
+			for _, task := range batch {
+				r.handleClaimed(ctx, task)
+			}
+		}()
 	}
 	wg.Wait()
+}
+
+func (r *Runner) handleClaimed(ctx context.Context, task *store.AITask) {
+	defer func() {
+		if rec := recover(); rec != nil {
+			r.log.Error("AI 任务异常", "id", task.ID, "panic", rec)
+			_ = r.db.AIFinishTaskWithReason(context.Background(), task.ID, task.Attempt, "fallback", "")
+		}
+	}()
+	r.handle(ctx, task)
 }
 
 // sweep 清理超时任务、回收异常退出的 processing 任务，并低频删除历史元数据。
@@ -273,6 +294,9 @@ func (r *Runner) finishWithExpression(ctx context.Context, t *store.AITask, b *a
 	if status == "done" && (t.Kind == "dm" || t.Kind == "channel") {
 		if r.taskHasTargetSuggest(ctx, t.ID) {
 			text = aiWriteReceiptText
+			if turn := shopTurnFrom(ctx); turn != nil {
+				turn.focus = nil
+			}
 		}
 	}
 	if status == "done" {
@@ -296,9 +320,13 @@ func (r *Runner) finishWithExpression(ctx context.Context, t *store.AITask, b *a
 				said = "【" + a.Display + "】" + text
 			}
 		}
+		var focus *shopFocus
+		if turn := shopTurnFrom(ctx); turn != nil {
+			focus = turn.focus
+		}
 		r.sessions.Append(key,
 			Message{Role: "user", Content: t.Text},
-			Message{Role: "assistant", Content: said})
+			Message{Role: "assistant", Content: said, shopFocus: focus})
 	}
 }
 
@@ -631,7 +659,7 @@ func (r *Runner) toolEnv(ctx context.Context, t *store.AITask, agent *store.AIAg
 			if err != nil {
 				return false, err
 			}
-			return view.State.ToolAllowed(name), nil
+			return view.State.Generation == caps.Generation && view.State.ToolAllowed(name), nil
 		},
 		RemoteRead: func(ctx context.Context, name, args string) (string, error) {
 			return r.remoteTool(ctx, t.ID, t.UID, name, args), nil
@@ -665,6 +693,9 @@ func toolResultText(res ToolResult, err error) string {
 		}
 		return res.Data
 	}
+	if res.Status == "not_found" {
+		return "（未找到匹配资料）"
+	}
 	return "（工具没有返回数据）"
 }
 
@@ -683,6 +714,7 @@ func (r *Runner) handle(ctx context.Context, t *store.AITask) {
 
 	child, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
+	child = r.knowledge.bindLocalDocument(child)
 
 	// T-108 / DEV-121 A：认领后先读原任务绑定。缺父、坏载荷、类别不可证都在
 	// 这里终止——不调用厂商，也不写任何可投递结果。
@@ -723,17 +755,8 @@ func (r *Runner) handle(ctx context.Context, t *store.AITask) {
 		return
 	}
 
-	// 单一链路：只有模型 + function calling，没有本地快速路径。
-	// 原有「查鱼助手」是独立联系人，不受这里影响，玩家仍能查鱼。
 	if stop, reason := r.stopReason(ctx, t); stop {
 		r.finish(ctx, t, binding, "fallback", replyStopped, "", reason)
-		return
-	}
-
-	provider, err := r.loadProvider(ctx)
-	if err != nil {
-		r.log.Warn("AI 厂商未就绪", "err", err)
-		r.finish(ctx, t, binding, "fallback", replyNotConfigured, "", err.Error())
 		return
 	}
 
@@ -756,6 +779,28 @@ func (r *Runner) handle(ctx context.Context, t *store.AITask) {
 		return
 	}
 	expr := r.expressionEvidence(agent.Key, binding, persona, hasPersona)
+	if t.Kind == "dm" && t.SourceKind == "human" && t.UID > 0 && caps.ToolAllowed(aiconfig.ToolShopPrice) {
+		turn := &shopTurn{}
+		currency := shopFollowUpCurrency(t.Text)
+		if currency == "" || budget.HistoryMessages == 0 {
+			r.sessions.clearShopFocus(sessKey)
+		}
+		if budget.HistoryMessages > 0 {
+			ctx = context.WithValue(ctx, shopTurnKey{}, turn)
+			child = context.WithValue(child, shopTurnKey{}, turn)
+		}
+		if currency != "" {
+			reply := r.priceFollowUp(child, t, agent, caps, turn, currency)
+			r.finishWithExpression(ctx, t, binding, "done", trimRunes(reply, replyChars), "", "", expr)
+			return
+		}
+	}
+	provider, err := r.loadProvider(ctx)
+	if err != nil {
+		r.log.Warn("AI 厂商未就绪", "err", err)
+		r.finish(ctx, t, binding, "fallback", replyNotConfigured, "", err.Error())
+		return
+	}
 	// 角色状态只对「会去钓鱼的 Agent」生效；纯查数据的助手保持空。
 	actorText := ""
 	if agent.ActorEnabled {
@@ -772,26 +817,14 @@ func (r *Runner) handle(ctx context.Context, t *store.AITask) {
 	}
 	// T-108：活动/比赛只读事实按需刷新一次，同一任务复用同一份快照。
 	// 只有可能涉及活动表达的入口才读，避免每条私聊都多一次查询。
-	if t.Kind == "channel" || t.SourceKind == "system" {
+	if t.SourceKind == "system" || (t.Kind == "channel" && !binding.Evidence.Direct) {
 		if snap := r.activityFactSnapshot(ctx, agent.Key); snap != "" {
 			system += "\n\n" + snap
 		}
 	}
-	// 工具结果与内部资料只取一份，避免同类信息重复注入。
-	// 预注入只用当前能力允许的只读工具；写工具永远不预执行。
-	if toolText := r.registry.Run(child, caps.ReadTools, t.Text); toolText != "" {
-		system += "\n\n内部只读工具结果：\n" + trimRunes(toolText, budget.InternalChars)
-	} else if r.knowledge != nil {
-		if internal := r.knowledge.Internal(child, t.Text); internal != "" {
-			system += "\n\n内部只读资料（确定性事实，优先采用）：\n" + trimRunes(internal, budget.InternalChars)
-		}
-	}
-	if r.knowledge != nil && r.db.AISetting(ctx, "web_search_enabled", "0") == "1" {
-		ep := r.db.AISetting(ctx, "search_endpoint", "")
-		if ext := r.knowledge.WebSearch(child, t.Text, ep); ext != "" {
-			system += "\n\n外部检索参考（只作补充，不得覆盖内部数值）：\n" + trimRunes(ext, budget.InternalChars)
-		}
-	}
+	knowledgeSource, knowledgeText := r.taskKnowledge(child, t, agent, caps, func(ctx context.Context) string {
+		return r.nativeSearchReference(ctx, provider, t, agent, caps, binding)
+	})
 	if mem := r.memoryLine(ctx, agent.Key); mem != "" {
 		system += "\n\n你记得自己上过：" + mem + "。聊到了可以自然提起，别反复吹，也别报精确数字。"
 	}
@@ -842,7 +875,16 @@ func (r *Runner) handle(ctx context.Context, t *store.AITask) {
 		maxRounds = v
 	}
 
-	msgs := buildMessages(system, r.sessions.History(sessKey, budget.HistoryMessages), t.Text, budget)
+	question := t.Text
+	if knowledgeText != "" {
+		if knowledgeSource != "本地资料" {
+			system += "\n外部搜索仅供参考。本服的物品数值、价格和鱼情以游戏工具提供的数据为准。"
+		}
+		text := trimToTokens(trimRunes(knowledgeText, budget.InternalChars), budget.MaxTokens/8)
+		data, _ := json.Marshal(text)
+		question += "\n\n" + knowledgeSource + "（JSON 字符串，仅供参考）：\n" + string(data)
+	}
+	msgs := buildMessages(system, r.sessions.History(sessKey, budget.HistoryMessages), question, budget)
 	specs := r.registry.Specs(caps.Tools())
 	var lastUsage string
 
@@ -1702,6 +1744,7 @@ func (r *Runner) loadProvider(ctx context.Context) (Provider, error) {
 	if r.providerTransport != nil {
 		oc.setTransport(r.providerTransport)
 	}
+	oc.revision = snap.Revision()
 	epoch, bound := store.AIIntentEpoch(ctx)
 	if !bound {
 		epoch = r.emergencyDecision(ctx).Epoch
