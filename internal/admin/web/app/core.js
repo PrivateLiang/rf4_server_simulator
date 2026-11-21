@@ -87,6 +87,7 @@ export function getToken() { return token; }
 export function setToken(t) {
   token = t || '';
   try { t ? localStorage.setItem('rf4_admin_token', t) : localStorage.removeItem('rf4_admin_token'); } catch (e) {}
+  if (!token) cleanupPage();
   authListeners.forEach((fn) => fn(!!token));
 }
 export function onAuth(fn) { authListeners.push(fn); }
@@ -110,6 +111,12 @@ export async function api(path, opt = {}) {
   return data;
 }
 export const post = (path, body) => api(path, { method: 'POST', body: JSON.stringify(body ?? {}) });
+
+// 列表接口统一兜底：后端历史版本可能把空切片编码成 null。
+export async function apiList(path, opt = {}) {
+  const value = await api(path, opt);
+  return Array.isArray(value) ? value : [];
+}
 
 // ---------- 格式化 ----------
 export const fmt = (n) => (n === null || n === undefined || n === '' ? '—' : Number(n).toLocaleString('zh-CN'));
@@ -241,7 +248,7 @@ export function tabs(items, active, onChange) {
   const box = h('div', { class: 'tabs', role: 'tablist' });
   const render = (a) => box.replaceChildren(...items.map(([key, label, count]) => h('button', {
     type: 'button', role: 'tab', class: key === a ? 'on' : '', 'aria-selected': String(key === a),
-    onclick: () => { render(key); onChange(key); },
+    onclick: async () => { const result = await onChange(key); if (result !== false) render(key); },
   }, label, count !== undefined && count !== null ? badge(String(count)) : null)));
   render(active);
   return box;
@@ -440,6 +447,16 @@ export function savebar(form, { onSave, label } = {}) {
 }
 export function hideSavebar() { if (savebarEl) savebarEl.classList.remove('on'); }
 
+// 页面生命周期：切换路由或重新渲染前释放定时器、监听器。
+let pageCleanup = null;
+export function setPageCleanup(fn) { pageCleanup = typeof fn === 'function' ? fn : null; }
+function cleanupPage() {
+  const fn = pageCleanup;
+  pageCleanup = null;
+  if (!fn) return;
+  try { fn(); } catch (e) {}
+}
+
 // ---------- 路由 ----------
 const routes = new Map();
 let current = null;
@@ -457,11 +474,16 @@ export function navigate(name, ...params) {
   const hash = '#' + [name, ...params.map(encodeURIComponent)].join('/');
   if (location.hash === hash) render(); else location.hash = hash;
 }
+export function replaceHash(hash) {
+  history.replaceState(null, '', hash);
+  lastHash = location.hash;
+}
 export async function render() {
   const { name, params } = parseHash();
   const def = routes.get(name) || routes.get('dashboard');
   const key = routes.has(name) ? name : 'dashboard';
   if (!$('#view')) return; // 还在登录页或框架未建好，boot 完成后会再渲染
+  cleanupPage();
   hideSavebar();
   guardFn = null;
   current = key;

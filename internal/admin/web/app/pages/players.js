@@ -1,7 +1,7 @@
 // 玩家：左边找人，右边看和改这个人的一切。
 import {
-  h, api, post, icon, toast, errText, pageHead, section, callout, badge, empty, btn, loading, Form, savebar, setLeaveGuard,
-  tabs, searchBox, debounce, confirmDialog, dialog, fmt, timeText, relTime, navigate, segmented, hideSavebar,
+  h, api, apiList, post, icon, toast, errText, pageHead, section, callout, badge, empty, btn, loading, Form, savebar, setLeaveGuard,
+  tabs, searchBox, debounce, confirmDialog, dialog, fmt, timeText, relTime, navigate, segmented, hideSavebar, setPageCleanup, replaceHash,
 } from '../core.js';
 import { itemIcon } from '../widgets.js';
 
@@ -15,7 +15,7 @@ export default async function players(params) {
   const listBox = h('div', { class: 'list' }, loading(4));
   const detail = h('div', {});
   const root = h('div', { class: 'page' },
-    pageHead('玩家', '查看和修改角色的等级、货币、背包、护鱼网、图鉴和技能。'),
+    pageHead('玩家', '查看和修改角色的等级、货币、背包、护鱼网、图鉴和技能。', btn('刷新', () => loadList(), 'sm', { icon: 'refresh' })),
     h('div', { class: 'master-detail' },
       h('div', { class: 'card master' },
         h('div', { style: { padding: '12px' } }, searchBox('搜索昵称或 UID', debounce((v) => { QUERY = v; loadList(); }, 250), QUERY)),
@@ -24,7 +24,7 @@ export default async function players(params) {
   let list = [];
   async function loadList() {
     try {
-      list = await api('/api/players?q=' + encodeURIComponent(QUERY));
+      list = await apiList('/api/players?q=' + encodeURIComponent(QUERY));
       listBox.replaceChildren(...(list.length ? list.map((p) => h('div', {
         class: 'list-item clickable' + (String(p.uid) === String(uidParam) ? ' on' : ''),
         onclick: () => navigate('players', p.uid),
@@ -35,6 +35,8 @@ export default async function players(params) {
     } catch (e) { listBox.replaceChildren(empty('读取失败', errText(e))); return []; }
   }
   const loaded = await loadList();
+  const timer = setInterval(() => { if (!document.hidden) loadList(); }, 8000);
+  setPageCleanup(() => clearInterval(timer));
   if (!uidParam) {
     if (loaded.length) { setTimeout(() => navigate('players', loaded[0].uid), 0); }
     detail.replaceChildren(h('div', { class: 'card' }, empty('选择一个玩家', '在左边的列表里点一个玩家。')));
@@ -51,13 +53,20 @@ export default async function players(params) {
 function playerDetail(p, tab) {
   const reload = () => navigate('players', p.uid, current);
   let current = tab;
+  let tabDirty = () => false;
   const pane = h('div');
-  const show = (t) => {
+  const show = async (t) => {
+    if (t === current && pane.childNodes.length) return false;
+    if (tabDirty()) {
+      const ok = await confirmDialog({ title: '有修改还没保存', desc: '切换标签会放弃这些修改。', confirm: '放弃并切换' });
+      if (!ok) return false;
+    }
     current = t;
-    history.replaceState(null, '', '#players/' + p.uid + '/' + t);
+    tabDirty = () => false;
+    replaceHash('#players/' + p.uid + '/' + t);
     hideSavebar(); setLeaveGuard(null);
     const builders = { profile, items, keepnet, records, skills, mail };
-    pane.replaceChildren(builders[t](p, reload));
+    pane.replaceChildren(builders[t](p, reload, (fn) => { tabDirty = fn; }));
   };
   const head = h('div', { class: 'row', style: { alignItems: 'flex-start', marginBottom: '6px' } },
     h('div', { class: 'avatar', style: { width: '44px', height: '44px', fontSize: '18px' }, text: (p.name || '?').slice(0, 1) }),
@@ -83,7 +92,7 @@ function playerDetail(p, tab) {
 }
 
 // ---------- 概况 ----------
-function profile(p, reload) {
+function profile(p, reload, setDirty) {
   const form = new Form();
   savebar(form, {
     onSave: async (v) => {
@@ -101,6 +110,7 @@ function profile(p, reload) {
     },
   });
   setLeaveGuard(() => form.isDirty());
+  setDirty(() => form.isDirty());
   // 会员：分段选择 + 到期时间
   const memberField = form.field({ key: 'membership', label: '会员', kind: 'string' }, String(p.membership || 0));
   memberField.input = h('input', { type: 'hidden', value: memberField.original });
@@ -180,9 +190,9 @@ function addFish(p, reload) {
   speciesInput.addEventListener('input', debounce(async () => {
     const q = speciesInput.value.trim();
     if (!q) { results.replaceChildren(); return; }
-    const list = await api('/api/fish/pool?limit=30&q=' + encodeURIComponent(q)).catch(() => []);
-    results.replaceChildren(h('div', { class: 'list' }, list.map((f) => h('div', { class: 'list-item clickable', onclick: () => { speciesInput.value = f.fish_key; hint.textContent = `${f.name_zh}，常见 ${fmt(f.min_g)}–${fmt(f.max_g)} g`; results.replaceChildren(); } },
-      h('div', { class: 'grow' }, h('div', { class: 'title', text: f.name_zh }), h('div', { class: 'sub mono', text: f.fish_key })), h('span', { class: 'muted small', text: `${fmt(f.min_g)}–${fmt(f.max_g)} g` })))));
+    const list = await apiList('/api/fish/pool?limit=30&q=' + encodeURIComponent(q)).catch(() => []);
+    results.replaceChildren(list.length ? h('div', { class: 'list' }, list.map((f) => h('div', { class: 'list-item clickable', onclick: () => { speciesInput.value = f.fish_key; hint.textContent = `${f.name_zh}，常见 ${fmt(f.min_g)}–${fmt(f.max_g)} g`; results.replaceChildren(); } },
+      h('div', { class: 'grow' }, h('div', { class: 'title', text: f.name_zh }), h('div', { class: 'sub mono', text: f.fish_key })), h('span', { class: 'muted small', text: `${fmt(f.min_g)}–${fmt(f.max_g)} g` })))) : empty('没有找到', '换个鱼名或 ID 试试。'));
   }, 250));
   dialog({
     title: '放入护鱼网', size: 'lg',
@@ -202,10 +212,12 @@ function addFish(p, reload) {
 }
 
 // ---------- 图鉴补录 ----------
-function records(p) {
+function records(p, reload, setDirty) {
   const box = h('div', {}, loading(5));
   let data = null, level = '', q = '';
   const changes = new Map();
+  setLeaveGuard(() => changes.size > 0);
+  setDirty(() => changes.size > 0);
   const saveBtn = btn('保存补录', async () => {
     saveBtn.disabled = true;
     try {
@@ -249,23 +261,26 @@ function records(p) {
 }
 
 // ---------- 技能 ----------
-function skills(p, reload) {
+function skills(p, reload, setDirty) {
   const list = p.skills || [];
   const avail = Number(p.available_points ?? 0);
-  const points = h('input', { class: 'input num', style: { width: '100px' }, value: avail });
+  const unsaved = new Set();
+  setLeaveGuard(() => unsaved.size > 0);
+  setDirty(() => unsaved.size > 0);
+  const points = h('input', { class: 'input num', style: { width: '100px' }, value: avail, oninput: () => { unsaved.add('points'); } });
   return h('div', { class: 'stack' },
     h('div', { class: 'card', style: { padding: '14px 16px', background: 'var(--surface-2)' } }, h('div', { class: 'row' },
       h('div', { class: 'grow' }, h('b', { text: '未分配的技能点' }), h('div', { class: 'muted small', text: `等级累计获得 ${p.skill_total ?? 0} 点，已经用掉 ${p.skill_spent ?? 0} 点。` })),
       points, btn('保存', async () => {
-        try { await post('/api/players/skills/points', { uid: p.uid, points: Math.max(0, Math.floor(+points.value || 0)) }); toast('已保存'); setTimeout(reload, 400); } catch (e) { toast(errText(e), 'bad'); }
+        try { await post('/api/players/skills/points', { uid: p.uid, points: Math.max(0, Math.floor(+points.value || 0)) }); unsaved.delete('points'); toast('已保存'); } catch (e) { toast(errText(e), 'bad'); }
       }, 'primary sm'))),
     h('p', { class: 'muted small', text: '下面是每种钓法的熟练度（0–100%）。' }),
     h('div', { class: 'grid-2' }, list.map((s) => {
       const v = Number(s.points) || 0;
       const out = h('output', { text: v.toFixed(1) + '%' });
-      const range = h('input', { type: 'range', min: 0, max: 100, step: 0.1, value: v, oninput: (e) => { out.textContent = Number(e.target.value).toFixed(1) + '%'; save.hidden = false; } });
+      const range = h('input', { type: 'range', min: 0, max: 100, step: 0.1, value: v, oninput: (e) => { out.textContent = Number(e.target.value).toFixed(1) + '%'; save.hidden = false; unsaved.add(s.skill_id); } });
       const save = btn('保存', async () => {
-        try { await post('/api/players/skills/update', { uid: p.uid, skill_id: s.skill_id, points: +range.value }); toast(`已保存「${s.name}」`); save.hidden = true; } catch (e) { toast(errText(e), 'bad'); }
+        try { await post('/api/players/skills/update', { uid: p.uid, skill_id: s.skill_id, points: +range.value }); unsaved.delete(s.skill_id); toast(`已保存「${s.name}」`); save.hidden = true; } catch (e) { toast(errText(e), 'bad'); }
       }, 'primary sm', { hidden: true });
       return h('div', { class: 'card', style: { padding: '12px 14px', background: 'var(--surface-2)' } },
         h('div', { class: 'row', style: { justifyContent: 'space-between' } }, h('b', { text: s.name }), save),
@@ -273,7 +288,7 @@ function skills(p, reload) {
     })),
     h('div', {}, btn('全部清零', async () => {
       if (!(await confirmDialog({ title: '把所有熟练度清零？', desc: '所有钓法的熟练度都会变成 0%，不能恢复。', confirm: '清零', danger: true }))) return;
-      try { for (const s of list) await post('/api/players/skills/update', { uid: p.uid, skill_id: s.skill_id, points: 0 }); toast('已清零'); reload(); } catch (e) { toast(errText(e), 'bad'); }
+      try { for (const s of list) await post('/api/players/skills/update', { uid: p.uid, skill_id: s.skill_id, points: 0 }); unsaved.clear(); toast('已清零'); reload(); } catch (e) { toast(errText(e), 'bad'); }
     }, 'danger sm')));
 }
 

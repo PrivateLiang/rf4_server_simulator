@@ -18,7 +18,9 @@ func TestBaitRuleConditionsAndLegalAlternateDiet(t *testing.T) {
 		t.Fatalf("parsed prerequisites = %d", conditional)
 	}
 	pike := fishBaitRules[ruleName("常见狗鱼")]
-	if len(pike.bottomOnly) != 2 || len(pike.deny) != 7 {
+	// deny 只剩 Gummi Makk：另外六个词（维基虫/吸引成分/硅胶海虫/八爪鱼/
+	// 巨大软饵/柳叶亮片）在客户端与静态库里都没有对应商品，属规则文本笔误，已删。
+	if len(pike.bottomOnly) != 2 || len(pike.deny) != 1 {
 		t.Fatalf("pike restrictions = %+v", pike)
 	}
 	for _, tc := range []struct {
@@ -65,8 +67,8 @@ func TestBaitRuleConditionsAndLegalAlternateDiet(t *testing.T) {
 	}
 	now := time.Now()
 	keys, weights := s.filterFishBaitSet("rules-test", []string{"rule_other"}, []string{"c.roach"}, []float64{1}, now)
-	if len(keys) != 1 || math.Abs(weights[0]/maxBaitPreference-.05) > 1e-12 {
-		t.Fatalf("legal alternate must be 5%%: %v %v", keys, weights)
+	if len(keys) != 1 || math.Abs(weights[0]/maxBaitPreference-legalAlternativeShare) > 1e-12 {
+		t.Fatalf("legal alternate must use legalAlternativeShare: %v %v", keys, weights)
 	}
 	if keys, _ := s.filterFishBaitSet("rules-test", []string{"rule_unknown"}, []string{"c.roach"}, []float64{1}, now); len(keys) != 0 {
 		t.Fatal("unknown natural bait became universal food")

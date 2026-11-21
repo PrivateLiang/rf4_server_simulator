@@ -655,7 +655,7 @@ func (s *Server) groundbaitGates(ctx context.Context, c fishRollContext, fishKey
 	layer := groundbaitClamp(s.fishLayerWeightProfile(p, c), 0.05, 1)
 	diel := groundbaitClamp(fishDielWeight(p, hour), 0.05, 1)
 	season := groundbaitClamp(fishSeasonWeight(p, water.Season), 0.05, 1)
-	rarity := groundbaitClamp(1-0.12*float64(p.RarityTier), 0.4, 1)
+	rarity := groundbaitClamp(1-0.12*float64(p.Rarity), 0.4, 1)
 	substrate := 1.0
 	if c.spotEnv.Known {
 		if prefs := fishEcologyJSONMap(p.SubstrateJSON); len(prefs) > 0 {
@@ -829,7 +829,7 @@ func (s *Server) groundbaitAffinityNow(ctx context.Context, c fishRollContext,
 // 中文名先取生态档案里的 source.name，读不到再退回数据库名字表。
 func (s *Server) groundbaitRuleVote(ctx context.Context, c fishRollContext, fishKey string) (map[string]bool, bool) {
 	if name := groundbaitFishName(fishKey); name != "" {
-		if rule, ok := fishBaitRules[ruleName(name)]; ok {
+		if rule, ok := lookupFishBaitRule(name); ok {
 			return groundbaitAcceptedFamilies(rule), true
 		}
 	}
@@ -838,7 +838,8 @@ func (s *Server) groundbaitRuleVote(ctx context.Context, c fishRollContext, fish
 		return nil, false
 	}
 	if name, ok := names[fishKey]; ok {
-		return groundbaitAcceptedFamilies(fishBaitRules[ruleName(name)]), true
+		r, _ := lookupFishBaitRule(name)
+		return groundbaitAcceptedFamilies(r), true
 	}
 	return nil, false
 }

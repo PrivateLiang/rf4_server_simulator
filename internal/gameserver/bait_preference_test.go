@@ -23,7 +23,9 @@ func TestFishBaitPreferenceAlternateCombinationAndChange(t *testing.T) {
 	}
 	favorite := weight([]string{"rule_worm"}, now)
 	other := weight([]string{"rule_other"}, now)
-	if other <= 0 || other >= favorite || other > 0.12 || favorite < 1 {
+	// 同食性兜底从 maxBaitPreference*0.05（≈0.086）提到 *0.20（≈0.345）：
+	// 兜底仍然远低于规则放行的满档，但不再等同于「几乎钓不到」。
+	if other <= 0 || other >= favorite || other > maxBaitPreference*legalAlternativeShare+1e-9 || favorite < 1 {
 		t.Fatalf("favorite=%f other=%f", favorite, other)
 	}
 	if weight([]string{"rule_worm", "rule_fly"}, now) <= favorite {
@@ -32,10 +34,18 @@ func TestFishBaitPreferenceAlternateCombinationAndChange(t *testing.T) {
 	if weight([]string{"rule_worm", "rule_worm"}, now) != favorite || weight([]string{"rule_fly", "rule_worm"}, now) != weight([]string{"rule_worm", "rule_fly"}, now) {
 		t.Fatal("duplicates or slot ordering changed bait preference")
 	}
-	if weight([]string{"rule_worm", "rule_lure"}, now) != 0 || weight([]string{"missing"}, now) != 0 || weight(nil, now) != 0 {
-		t.Fatal("combination bypassed banned, invalid or absent bait")
+	// 禁饵只作用于它自己那一款：同杆里合法的蚯蚓仍然有效（多钩组不能连坐），
+	// 单独挂禁饵、坏 id、空列表则必须一片饵都不给。
+	if weight([]string{"rule_lure"}, now) != 0 {
+		t.Fatal("banned lure alone must not feed the fish")
 	}
-	if favorite == weight([]string{"rule_worm"}, now.Add(600*time.Second)) {
+	if got := weight([]string{"rule_worm", "rule_lure"}, now); got != favorite {
+		t.Fatalf("banned bait must be skipped, not poison the legal one: %f != %f", got, favorite)
+	}
+	if weight([]string{"missing"}, now) != 0 || weight(nil, now) != 0 {
+		t.Fatal("invalid or absent bait must not be scored")
+	}
+	if favorite == weight([]string{"rule_worm"}, now.Add(distributionPeriodRealHours*time.Hour)) {
 		t.Fatal("bait preference did not vary over game time")
 	}
 	setBaitRuleSwitch(t, s, "1")

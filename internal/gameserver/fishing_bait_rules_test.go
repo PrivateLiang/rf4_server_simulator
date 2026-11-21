@@ -12,6 +12,8 @@ import (
 )
 
 func TestFishBaitRuleParsingAndTypes(t *testing.T) {
+	// 252 条：哲罗鱼那份规则只列了本地不存在的「松鼠假饵/老鼠假饵」，但保留它
+	// 是刻意的——「有规则但一款饵都没匹配上」会走证据兜底，行为与删规则不同。
 	if len(fishBaitRules) != 252 {
 		t.Fatalf("rules=%d", len(fishBaitRules))
 	}
@@ -19,7 +21,9 @@ func TestFishBaitRuleParsingAndTypes(t *testing.T) {
 		t.Fatal("fish alias mismatch")
 	}
 	roach := fishBaitRules[ruleName("常见拟鲤")]
-	if len(roach.deny) != 2 || roach.deny[0] != "拟饵" {
+	// 常见拟鲤官方记录里 3.6% 是拟饵（Nasty worm/Spiker 等），规则不再整体禁拟饵，
+	// 只保留「饵鱼类」这一条排除。
+	if len(roach.deny) != 1 || roach.deny[0] != "饵鱼类" {
 		t.Fatalf("exclusions=%v", roach.deny)
 	}
 	for _, tt := range []struct {
@@ -36,7 +40,9 @@ func TestFishBaitRuleParsingAndTypes(t *testing.T) {
 		{"model", ruleBait{name: "Hunter 1-001", category: 17, lureType: 4}, "Hunter 1系列", true},
 		{"different model", ruleBait{name: "Hunter 1000-001", category: 17, lureType: 4}, "Hunter 1系列", false},
 		{"excluded family", ruleBait{name: "Gummi Makk 10-001", category: 17, lureType: 3}, "Gummi Makk", true},
-		{"alias", ruleBait{name: "红蚯蚓", id: "muckworm", category: 27, baitType: 6}, "粪便蠕虫", true},
+		// 粪便蠕虫是三个地区粪蚯蚓变种，不是红蚯蚓（muckworm 的说明是红蚯蚓）。
+		{"red compost worm is not muckworm", ruleBait{name: "红蚯蚓", id: "muckworm", category: 27, baitType: 6}, "粪便蠕虫", false},
+		{"sura brandling", ruleBait{name: "苏尔斯基粪蚯蚓", id: "worm_sur", category: 27, baitType: 6}, "粪便蠕虫", true},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			if got := tt.bait.matches(tt.term); got != tt.want {
@@ -109,16 +115,16 @@ func TestFishBaitSwitchFiltersAndRestoresLegacy(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if s.rollFish("level_900_rules", "rule_lure") != nil {
-		t.Fatal("evidence bypassed explicit exclusion")
+	if s.rollFish("level_900_rules", "rule_lure") == nil {
+		t.Fatal("lure should be reachable after official-share correction")
 	}
 	if f := s.rollFish("level_900_rules", "rule_other"); f == nil {
 		t.Fatalf("evidence ignored: %+v", f)
 	}
 	for _, q := range []string{
 		`INSERT INTO loc_alias(alias,loc) VALUES('level_901_rules','rules-added')`,
-		`INSERT INTO loc_wiki_fish(loc,fish_key,fish_zh) VALUES('rules-added','frog','青蛙')`,
-		`INSERT INTO fish_weight_override(loc,fish_key,weight,enabled,updated_by,updated_ts) VALUES('rules-added','c.roach',1,1,'test',0)`,
+		`INSERT INTO loc_wiki_fish(loc,fish_key,fish_zh) VALUES('rules-added','frog','青蛙'),('rules-added','c.carp','金鲫')`,
+		`INSERT INTO fish_weight_override(loc,fish_key,weight,enabled,updated_by,updated_ts) VALUES('rules-added','c.carp',1,1,'test',0)`,
 	} {
 		if _, err := db.SQL.Exec(q); err != nil {
 			t.Fatal(err)
@@ -207,7 +213,7 @@ func TestFishBaitRulesWithReadOnlyStaticAndExistingDatabase(t *testing.T) {
 			db.Close()
 			t.Fatal("read-only evidence not applied")
 		}
-		keys, _ = s.filterFishBaits("克马羚诺也湖", "spinnerbaits_1244", []string{"c.roach"}, []float64{1})
+		keys, _ = s.filterFishBaits("克马羚诺也湖", "spinnerbaits_1244", []string{"c.carp"}, []float64{1})
 		if len(keys) != 0 {
 			db.Close()
 			t.Fatal("read-only rule exclusion ignored")

@@ -72,6 +72,7 @@ export function updateBanner(u) {
   const dismiss = u.forced ? null : h('button', {
     class: 'btn ghost sm', text: '跳过这个版本', onclick: async () => {
       try {
+        // launcher owns update dismiss at the root API even when admin is mounted under /admin/.
         const r = await fetch('/api/update/dismiss', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ version: u.latest_version }) });
         if (!r.ok) throw new Error('HTTP ' + r.status);
         slot.replaceChildren();
@@ -87,8 +88,8 @@ export function updateBanner(u) {
 // ---- 公告条：内容由维护者以混淆形式内嵌，运行时解码，避免明文出现在源码里 ----
 function noticeBar() {
   const K = [114, 70, 52, 35, 50, 48, 50, 54];
-  const C = ['lNqYypOJ1a3co7Gu2oSL087G', '0pmi3466lvuoy7K11KrYoKCV', '17+k0sn90J6n2IaPldKczI68', '2obar6yR2pKZ39jR25++1IiS', 'lPO1xIyU3YrodQMaAAMBA0Z2'];
-  const KEY = 'rf4.n0t1ce.v1';
+  const C = ['lNqYypOJ1a3co7Gu2oSL087G', '0pmi3466lvuoy7K11KrYoKCV', '17+k0sn90J6n2IaPldKczI68', '2obar6yR2pKZ39jR25++1amt', 'lv6ecmPUiJKU87XEjJTdiuh1', 'AxoAAwEDRnbXo7MCAANGcAQb', 'AADRtvN3BREKAQcER38CwLKx', 'AwdBcgIVBwcGAA=='];
+  const KEY = 'rf4.n0t1ce.v2';
   try { if (localStorage.getItem(KEY) === '1') return null; } catch (e) {}
   let txt = '';
   try {
@@ -128,7 +129,7 @@ function loginView() {
   },
   h('div', { class: 'brand-mark' }, icon('logo')),
   h('h1', { text: '登录管理后台' }),
-  h('p', { text: '管理玩家、钓鱼玩法、商店和 AI 助手' }),
+  h('p', { text: '管理玩家、钓鱼玩法、商店和系统设置' }),
   err,
   h('div', { class: 'field' }, h('label', { for: 'lu', text: '账号' }), user),
   h('div', { class: 'field' }, h('label', { for: 'lp', text: '密码' }), pass),
