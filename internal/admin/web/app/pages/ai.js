@@ -250,7 +250,34 @@ function agentStatus(a) {
   if (!a.contact_visible) return badge('进入中，等待玩家看到', 'warn', true);
   return badge('在游戏中', 'ok', true);
 }
+const ACTOR_LABELS = { fishing: '钓鱼中', resting: '休息中', moving: '换点中', idle: '闲逛中' };
+
+// 角色卡上的「现在在哪、在干什么」：只在有运行态时显示，不猜。
+// 状态很久没更新（游戏服没跑/没人在线）时明确写出来，避免把陈旧状态当成正在发生。
+function actorLine(a) {
+  const act = a.actor;
+  if (!act || !act.activity) return '';
+  const nowSec = Date.now() / 1000;
+  const bits = [ACTOR_LABELS[act.activity] || act.activity];
+  if (act.loc_name) bits.push(act.loc_name);
+  if (act.target_name) bits.push('目标 ' + act.target_name);
+  if (act.since_ts) {
+    const mins = Math.max(0, Math.round((nowSec - act.since_ts) / 60));
+    if (mins >= 1) bits.push('已 ' + mins + ' 分钟');
+  }
+  if (act.until_ts && act.until_ts > nowSec) {
+    const left = Math.max(1, Math.round((act.until_ts - nowSec) / 60));
+    bits.push('预计 ' + left + ' 分钟后换状态');
+  }
+  if (act.updated_ts) {
+    const age = Math.round((nowSec - act.updated_ts) / 60);
+    if (age >= 3) bits.push('状态 ' + age + ' 分钟前更新');
+  }
+  return bits.join(' · ');
+}
+
 function agentCard(a) {
+  const now = actorLine(a);
   return h('button', {
     type: 'button', class: 'card', onclick: () => agentDrawer(a.key),
     style: { textAlign: 'left', padding: '16px 18px', cursor: 'pointer', display: 'flex', gap: '14px', alignItems: 'flex-start' },
@@ -259,6 +286,7 @@ function agentCard(a) {
   h('div', { class: 'grow' },
     h('div', { class: 'row', style: { justifyContent: 'space-between' } }, h('b', { style: { fontSize: '15px' }, text: a.display || a.key }), agentStatus(a)),
     h('div', { class: 'muted small', style: { marginTop: '2px' }, text: a.role || '没有填写身份' }),
+    now ? h('div', { class: 'small', style: { marginTop: '6px', color: 'var(--accent)' }, text: now }) : null,
     h('div', { class: 'row small muted', style: { marginTop: '10px', gap: '14px' } },
       h('span', { text: '渔获 ' + fmt(a.catch_total || 0) + ' 条' }),
       a.last_dm_ts ? h('span', { text: '最近私聊 ' + relTime(a.last_dm_ts) }) : h('span', { text: '还没有人私聊过' }))));

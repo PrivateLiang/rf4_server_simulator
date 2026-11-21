@@ -681,7 +681,9 @@ func (s *Server) handleAIStatus(w http.ResponseWriter, r *http.Request) {
 		VisibleEvidence string  `json:"visible_evidence"`
 		PendingCommands int     `json:"pending_commands"`
 		CatchTotal      int     `json:"catch_total"`
+		CatchTotalG     int64   `json:"catch_total_g"`
 		CatchToday      int     `json:"catch_today"`
+		CatchTodayG     int64   `json:"catch_today_g"`
 		MemoryTotal     int     `json:"memory_total"`
 		LastDMTS        float64 `json:"last_dm_ts"`
 		LastReplyStatus string  `json:"last_reply_status"`
@@ -716,7 +718,9 @@ func (s *Server) handleAIStatus(w http.ResponseWriter, r *http.Request) {
 				VisibleEvidence: ev.VisibleEvidence,
 				PendingCommands: ev.PendingCommands,
 				CatchTotal:      ev.CatchTotal,
+				CatchTotalG:     ev.CatchTotalG,
 				CatchToday:      ev.CatchToday,
+				CatchTodayG:     ev.CatchTodayG,
 				MemoryTotal:     ev.MemoryTotal,
 				LastDMTS:        ev.LastDMTS,
 				LastReplyStatus: ev.LastReplyStatus,
@@ -727,7 +731,8 @@ func (s *Server) handleAIStatus(w http.ResponseWriter, r *http.Request) {
 			if act, ok := actorByKey[a.Key]; ok {
 				v.Actor = map[string]any{
 					"activity": act.Activity, "loc_name": act.LocName, "target_name": act.TargetName,
-					"since_ts": act.SinceTS, "until_ts": act.ActivityUntilTS, "energy": act.Energy,
+					"since_ts": act.SinceTS, "until_ts": act.ActivityUntilTS,
+					"energy": act.Energy, "updated_ts": act.UpdatedTS,
 				}
 			}
 			agents = append(agents, v)
