@@ -740,7 +740,7 @@ func TestT104CapabilityRuntimeRevokeKeepsGuide(t *testing.T) {
 		t.Fatal(err)
 	}
 	if view.State.State != aiconfig.CapabilityStateConfigured || view.State.Revision != 2 ||
-		len(view.State.ReadTools) != 8 || view.State.Has(aiconfig.CapabilityVirtualFishing) {
+		strings.Join(view.State.ReadTools, ",") != aiconfig.ToolMapVibe || view.State.Has(aiconfig.CapabilityVirtualFishing) {
 		t.Fatalf("撤销垂钓后投影 = %+v", view.State)
 	}
 	rt, err := db.AICapabilityRuntimeStatus(ctx, agent, view.State)

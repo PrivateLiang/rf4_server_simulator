@@ -75,6 +75,23 @@ func TestAIActorAdvanceRestToFishing(t *testing.T) {
 	}
 }
 
+func TestAIActorAdvanceIdleToRestUsesRestDuration(t *testing.T) {
+	a := &AIActor{Activity: "idle", ActivityUntilTS: 100, Energy: 70}
+	cfg := AIActorConfig{FishingMin: 1000, FishingMax: 2000, RestMin: 500, RestMax: 800}
+	in := AIActorAdvanceInput{
+		Now: 200, Cfg: cfg, Roll: func() float64 { return 0.99 },
+		FishingSeconds: func() float64 { return 1500 },
+		RestSeconds:    func() float64 { return 600 },
+	}
+	a.AdvanceWith(in)
+	if a.Activity != "resting" {
+		t.Fatalf("idle 应转到休息，activity = %q", a.Activity)
+	}
+	if a.ActivityUntilTS != 800 {
+		t.Fatalf("休息时长应取休息区间（200+600），实际 %v", a.ActivityUntilTS)
+	}
+}
+
 // 时长覆盖：调用方给出的这一段时长优先于区间随机，用来表达 Trest 与硬驻留。
 func TestAIActorAdvanceUsesProvidedDurations(t *testing.T) {
 	a := &AIActor{Activity: "fishing", ActivityUntilTS: 100, SinceTS: 10, Energy: 90}

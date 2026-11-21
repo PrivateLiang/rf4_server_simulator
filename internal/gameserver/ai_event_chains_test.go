@@ -171,6 +171,48 @@ func TestT108ChannelRoundtableChain(t *testing.T) {
 		}
 	})
 
+	t.Run("群称只判定一次圆桌", func(t *testing.T) {
+		db := openStaticTestDB(t)
+		probe := newT013ChatProbeWithDB(t, "t108_rt_once", db)
+		var candidates []aiconfig.PersonalityConfig
+		keys := []string{"companion", "fishguide"}
+		for _, key := range keys {
+			t108Agent(t, db, "t108_rt_once", key)
+			grantCapabilities(t, db, key, aiconfig.CapabilityJoinRoundtable)
+			t108Personality(t, db, key, 10, 10, 10, 10)
+			p, err := db.AIGetPersonality(ctx, key)
+			if err != nil {
+				t.Fatal(err)
+			}
+			candidates = append(candidates, p.Config)
+		}
+		isQuiet := func(seed int64, i int) bool {
+			want, _ := activityWants(candidates[i], seed^store.AIActorSeed(0, keys[i]), activityGatherFeature())
+			return !want
+		}
+		seed := int64(1)
+		for seed <= 4096 && !(isQuiet(seed, 0) && isQuiet(seed, 1)) {
+			seed++
+		}
+		if seed > 4096 {
+			t.Fatal("找不到两名角色均保持沉默的种子")
+		}
+		attempts := 0
+		prev := aiEventSeedForTest
+		aiEventSeedForTest = func() int64 { attempts++; return seed }
+		t.Cleanup(func() { aiEventSeedForTest = prev })
+
+		probe.send(t, "你们今天钓得怎么样")
+		if attempts != 2 {
+			t.Fatalf("期望圆桌和单人回复各判定一次，实际判定 %d 次", attempts)
+		}
+		for _, task := range t108Tasks(t, db) {
+			if task.Kind == "roundtable" {
+				t.Fatalf("两名角色都不愿起桌，不应创建圆桌任务：%+v", task)
+			}
+		}
+	})
+
 	t.Run("越界点名不冒头", func(t *testing.T) {
 		db := openStaticTestDB(t)
 		probe := newT013ChatProbeWithDB(t, "t108_rt_scope", db)
@@ -401,6 +443,27 @@ func TestT108FishingChainDev113A(t *testing.T) {
 		}
 		if n := len(t108Tasks(t, db)); n != 0 {
 			t.Fatalf("入队失败不应留下任务，实得 %d", n)
+		}
+	})
+
+	t.Run("静默档也受节拍约束", func(t *testing.T) {
+		db := openStaticTestDB(t)
+		probe := newT013ChatProbeWithDB(t, "t108_fish_interval", db)
+		seedFishing(t, db)
+		t108Agent(t, db, "t108_fish_interval", "companion")
+		grantCapabilities(t, db, "companion",
+			aiconfig.CapabilityVirtualFishing, aiconfig.CapabilityJoinRoundtable,
+			aiconfig.CapabilityBroadcastCatch)
+		t108Personality(t, db, "companion", 95, 90, 40, 50)
+		// 频道刚上过鱼：把节拍钉死，任何一档（含普通达标/静默）都不该再入库。
+		now := time.Now()
+		aiFishingStates.Store("t108_fish_interval", &aiFishingChannelState{
+			hourStart: now, lastAt: now, interval: time.Hour,
+		})
+		t.Cleanup(func() { aiFishingStates.Delete("t108_fish_interval") })
+		probe.srv.aiFishingForChannel(ctx, db, "t108_fish_interval", t013SelfUID)
+		if n := t108Count(t, db, `SELECT COUNT(*) FROM ai_catch WHERE agent_key='companion'`); n != 0 {
+			t.Fatalf("节拍内不应再上鱼，实际 %d 条", n)
 		}
 	})
 }

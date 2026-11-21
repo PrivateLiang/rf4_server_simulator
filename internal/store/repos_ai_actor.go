@@ -323,14 +323,15 @@ func (a *AIActor) AdvanceWith(in AIActorAdvanceInput) bool {
 			a.ActivityUntilTS = now + in.restSeconds()
 		}
 	default: // idle / moving
+		a.SinceTS = now
 		if roll() < 0.7 {
 			a.Activity = "fishing"
+			a.ActivityUntilTS = now + in.fishingSeconds()
 		} else {
 			a.Activity = "resting"
 			a.Energy = clampF(a.Energy+10, 0, 100)
+			a.ActivityUntilTS = now + in.restSeconds()
 		}
-		a.SinceTS = now
-		a.ActivityUntilTS = now + in.fishingSeconds()
 	}
 	return true
 }

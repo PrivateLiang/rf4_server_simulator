@@ -85,6 +85,10 @@ func (s *Server) maybeAIFishingTalk(ctx context.Context, db *store.DB, channel s
 	if !want {
 		return 0, false
 	}
+	// 与闲时搭话、圆桌共用频道预算；上鱼播报优先，且不看最小间隔。
+	if !s.aiTalkAllow(ctx, channel, true) {
+		return 0, false
+	}
 	taskID, err := s.aiFishingTalkEnqueue(ctx, db, channel, uid, agent, fish, seed,
 		aiPersonalityRevision(p, bindable))
 	if err != nil {
@@ -176,7 +180,8 @@ func (s *Server) tryAIFishingRoundtable(ctx context.Context, db *store.DB, chann
 
 	peers, rejects := s.aiEventCandidates(ctx, channel, aiconfig.EventRoundtable)
 	s.logEventRejects(channel, aiconfig.EventRoundtable, rejects)
-	keys := make([]string, 0, 3)
+	rt := s.aiRoundtableProfile(ctx)
+	keys := make([]string, 0, rt.Speakers)
 	allowed := map[string]bool{}
 	for _, a := range peers {
 		allowed[a.Key] = true
@@ -190,7 +195,7 @@ func (s *Server) tryAIFishingRoundtable(ctx context.Context, db *store.DB, chann
 			continue
 		}
 		keys = append(keys, a.Key)
-		if len(keys) == 3 {
+		if len(keys) >= rt.Speakers {
 			break
 		}
 	}
@@ -205,8 +210,8 @@ func (s *Server) tryAIFishingRoundtable(ctx context.Context, db *store.DB, chann
 	if !want {
 		return false
 	}
-	cooldown := time.Duration(s.aiIntSetting(ctx, "roundtable_cooldown_ms", 120000, 30000, 600000)) * time.Millisecond
-	hourly := s.aiIntSetting(ctx, "roundtable_hourly_limit", 3, 1, 10)
+	cooldown := time.Duration(rt.CooldownSec) * time.Second
+	hourly := rt.Hourly
 	if !rtAllow(channel, cooldown, hourly) {
 		return false
 	}

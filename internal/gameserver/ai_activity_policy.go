@@ -202,6 +202,11 @@ func (s *Server) noteFishingStage(stage, agentKey string, taskID int64) {
 	if aiFishingStageForTest != nil {
 		aiFishingStageForTest(stage, agentKey, taskID)
 	}
+	// attempt 每 10 秒一次，INFO 会把日志刷满；诊断其余三段仍留 INFO。
+	if stage == "attempt" {
+		s.log.Debug("AI 主动事件诊断", "stage", stage, "agent", agentKey, "task_id", taskID)
+		return
+	}
 	s.log.Info("AI 主动事件诊断", "stage", stage, "agent", agentKey, "task_id", taskID)
 }
 

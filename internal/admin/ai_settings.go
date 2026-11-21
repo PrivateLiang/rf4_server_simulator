@@ -109,7 +109,8 @@ var AISettingSpecs = []SettingSpec{
 
 	// ---- fishing：模拟与状态 ----
 	{Key: "ai_fishing_enabled", Module: "fishing", Group: "sim", Label: "虚拟上鱼总开关", Hint: "关闭后 AI 一条鱼都不上；关闭不会删除已有渔获", Kind: KindBool, Def: "0"},
-	{Key: "ai_fishing_hourly_limit", Module: "fishing", Group: "sim", Label: "每小时发言上限", Hint: "1–24；播报开启后计说出口的话，静默档不占配额", Kind: KindInt, Def: "12", Min: 1, Max: 24},
+	// 旧配额：仍作为兜底读取（可播报档的小时尝试上限），页面不再暴露；说话总量由「整体氛围」控制。
+	{Key: "ai_fishing_hourly_limit", Module: "fishing", Group: "sim", Label: "每小时播报尝试上限（旧）", Hint: "1–24；旧兜底参数，当前页面不展示", Kind: KindInt, Def: "12", Min: 1, Max: 24, Hidden: true},
 	{Key: "ai_fishing_base_interval_ms", Module: "fishing", Group: "sim", Label: "基础节拍 ms", Hint: "60000–1800000，每次发言后 ×1.2", Kind: KindInt, Def: "300000", Min: 60000, Max: 1800000, Advanced: true},
 	{Key: "ai_fishing_max_interval_ms", Module: "fishing", Group: "sim", Label: "节拍封顶 ms", Hint: "60000–3600000", Kind: KindInt, Def: "600000", Min: 60000, Max: 3600000, Advanced: true},
 
@@ -121,13 +122,32 @@ var AISettingSpecs = []SettingSpec{
 	{Key: "ai_fishing_miss_ratio", Module: "fishing", Group: "rare", Label: "未达标分界", Hint: "0.05–0.6，相对星线", Kind: KindFloat, Def: "0.35", Min: 0.05, Max: 0.6, Advanced: true},
 	{Key: "ai_fishing_near_ratio", Module: "fishing", Group: "rare", Label: "下饭分界", Hint: "0.6–0.99，相对星线", Kind: KindFloat, Def: "0.9", Min: 0.6, Max: 0.99, Advanced: true},
 
-	// ---- fishing：上鱼播报 ----
-	{Key: "ai_fishing_talk_enabled", Module: "fishing", Group: "talk", Label: "AI 上鱼主动说话", Hint: "默认关。打开后 AI 按自己的人设报一句", Kind: KindBool, Def: "0"},
-	{Key: "ai_fishing_talk_super_chance", Module: "fishing", Group: "talk", Label: "上蓝发言概率", Hint: "0–1，稀有档建议 1.0", Kind: KindFloat, Def: "1", Min: 0, Max: 1, Advanced: true},
-	{Key: "ai_fishing_talk_star_chance", Module: "fishing", Group: "talk", Label: "上星发言概率", Hint: "0–1", Kind: KindFloat, Def: "0.9", Min: 0, Max: 1, Advanced: true},
-	{Key: "ai_fishing_talk_near_chance", Module: "fishing", Group: "talk", Label: "下饭鱼发言概率", Hint: "0–1", Kind: KindFloat, Def: "0.35", Min: 0, Max: 1, Advanced: true},
-	{Key: "ai_fishing_talk_miss_chance", Module: "fishing", Group: "talk", Label: "未达标发言概率", Hint: "0–1", Kind: KindFloat, Def: "0.25", Min: 0, Max: 1, Advanced: true},
-	{Key: "ai_fishing_roundtable_chance", Module: "fishing", Group: "talk", Label: "上蓝升级圆桌概率", Hint: "0–1，复用圆桌冷却与每小时上限", Kind: KindFloat, Def: "0.5", Min: 0, Max: 1, Advanced: true},
+	// ---- fishing：上鱼播报（旧参数，行为已由能力 + 性格 + 说话预算接管）----
+	{Key: "ai_fishing_talk_enabled", Module: "fishing", Group: "talk", Label: "AI 上鱼主动说话（旧）", Hint: "旧开关，不再读取", Kind: KindBool, Def: "0", Hidden: true},
+	{Key: "ai_fishing_talk_super_chance", Module: "fishing", Group: "talk", Label: "上蓝发言概率（旧）", Hint: "旧概率，不再读取", Kind: KindFloat, Def: "1", Min: 0, Max: 1, Hidden: true},
+	{Key: "ai_fishing_talk_star_chance", Module: "fishing", Group: "talk", Label: "上星发言概率（旧）", Hint: "旧概率，不再读取", Kind: KindFloat, Def: "0.9", Min: 0, Max: 1, Hidden: true},
+	{Key: "ai_fishing_talk_near_chance", Module: "fishing", Group: "talk", Label: "下饭鱼发言概率（旧）", Hint: "旧概率，不再读取", Kind: KindFloat, Def: "0.35", Min: 0, Max: 1, Hidden: true},
+	{Key: "ai_fishing_talk_miss_chance", Module: "fishing", Group: "talk", Label: "未达标发言概率（旧）", Hint: "旧概率，不再读取", Kind: KindFloat, Def: "0.25", Min: 0, Max: 1, Hidden: true},
+	{Key: "ai_fishing_roundtable_chance", Module: "fishing", Group: "talk", Label: "上蓝升级圆桌概率（旧）", Hint: "旧概率，不再读取；是否升级由四维决定", Kind: KindFloat, Def: "0.5", Min: 0, Max: 1, Hidden: true},
+
+	// ---- fishing：说话节奏（频道级总预算）----
+	// 上鱼播报、闲时搭话、圆桌共用；mood 选预设，custom 才读下面五个参数。
+	{Key: "ai_fishing_mood", Module: "fishing", Group: "talk", Label: "整体氛围", Hint: "冷清/正常/热闹/不限四档预设；自定义才读下面的参数", Kind: KindString, Def: "normal", Advanced: true},
+	{Key: "ai_talk_hourly_limit", Module: "fishing", Group: "talk", Label: "自定义每小时上限", Hint: "1–24 句；所有角色、所有说话通道合计", Kind: KindInt, Def: "6", Min: 1, Max: 24, Advanced: true},
+	{Key: "ai_talk_min_gap_s", Module: "fishing", Group: "talk", Label: "自定义最小间隔", Hint: "30–900 秒；闲时搭话遵守，上鱼播报可插队", Kind: KindInt, Def: "480", Min: 30, Max: 900, Advanced: true},
+	{Key: "ai_talk_burst", Module: "fishing", Group: "talk", Label: "自定义连发上限", Hint: "1–4 句；小时开头或跨时段允许超前说几句", Kind: KindInt, Def: "2", Min: 1, Max: 4, Advanced: true},
+	{Key: "ai_talk_roundtable_speakers", Module: "fishing", Group: "talk", Label: "自定义最多几人接话", Hint: "2–12 人；仅自定义档生效，条数按人数 +2", Kind: KindInt, Def: "5", Min: 2, Max: 12, Advanced: true},
+	{Key: "ai_talk_weight_0", Module: "fishing", Group: "talk", Label: "0–15 分钟权重", Hint: "0–3；四段会归一化", Kind: KindFloat, Def: "1", Min: 0, Max: 3, Advanced: true},
+	{Key: "ai_talk_weight_1", Module: "fishing", Group: "talk", Label: "15–30 分钟权重", Hint: "0–3；四段会归一化", Kind: KindFloat, Def: "1", Min: 0, Max: 3, Advanced: true},
+	{Key: "ai_talk_weight_2", Module: "fishing", Group: "talk", Label: "30–45 分钟权重", Hint: "0–3；四段会归一化", Kind: KindFloat, Def: "1", Min: 0, Max: 3, Advanced: true},
+	{Key: "ai_talk_weight_3", Module: "fishing", Group: "talk", Label: "45–60 分钟权重", Hint: "0–3；四段会归一化", Kind: KindFloat, Def: "1", Min: 0, Max: 3, Advanced: true},
+
+	// ---- fishing：闲时搭话 ----
+	// 独立于上鱼播报：角色要在能力里勾选「闲时搭话」，这里才可能生效。
+	// Advanced 只影响通用表单的首屏预算；「虚拟钓鱼」页有专门的「闲时搭话」区块显式渲染。
+	{Key: "ai_idle_silence_min", Module: "fishing", Group: "idle", Label: "安静多久后搭话", Hint: "1–15 分钟；频道里没人说话超过这个时间，AI 才可能自己找个话头", Kind: KindInt, Def: "3", Min: 1, Max: 15, Advanced: true},
+	// 小时上限已并入频道级「说话节奏」，这一项只保留旧库兼容，不再读取。
+	{Key: "ai_idle_hourly_limit", Module: "fishing", Group: "idle", Label: "每小时最多搭话（已并入说话节奏）", Hint: "旧参数；现在由「整体氛围」统一控制", Kind: KindInt, Def: "4", Min: 1, Max: 12, Hidden: true},
 
 	// ---- fishing：渔获与战绩注入 ----
 	{Key: "ai_memory_inject", Module: "fishing", Group: "inject", Label: "注入战绩摘要", Hint: "把星/蓝战绩摘要注入上下文；关闭不删除记录", Kind: KindBool, Def: aiconfig.DefaultMemoryInject},

@@ -49,6 +49,13 @@ const (
 // rare 表示是否值得写入战绩记忆（只有星/蓝）。
 func (e aiFishEvent) rare() bool { return e == evStar || e == evSuper }
 
+// aiFishingAgent 是一个此刻真的在抛竿的角色（能力已获准 + 状态为 fishing）。
+// 闲时搭话与上鱼播报共用这份候选。
+type aiFishingAgent struct {
+	agent store.AIAgent
+	actor *store.AIActor
+}
+
 type aiFishingChannelState struct {
 	mu        sync.Mutex
 	hourStart time.Time
@@ -140,11 +147,7 @@ func (s *Server) aiFishingForChannel(ctx context.Context, db *store.DB, channel 
 	}
 	// 在钓鱼开关关掉就永远不钓；开着也可能正在休息/闲逛。
 	// 先推进状态，再只保留此刻真的在抛竿的人。
-	type fishingAgent struct {
-		agent store.AIAgent
-		actor *store.AIActor
-	}
-	fishing := make([]fishingAgent, 0, len(agents))
+	fishing := make([]aiFishingAgent, 0, len(agents))
 	for _, a := range agents {
 		if !a.ActorEnabled {
 			continue
@@ -158,9 +161,14 @@ func (s *Server) aiFishingForChannel(ctx context.Context, db *store.DB, channel 
 		if st.Activity != "fishing" || st.Loc == "" {
 			continue
 		}
-		fishing = append(fishing, fishingAgent{agent: a, actor: st})
+		fishing = append(fishing, aiFishingAgent{agent: a, actor: st})
 	}
 	if len(fishing) == 0 {
+		return
+	}
+	// 闲时搭话与上鱼播报是两条独立通道：先看要不要自己找个话头。
+	// 说了就跳过本 tick 的上鱼，避免两条消息挤在同一时刻。
+	if s.maybeAIIdleChat(ctx, db, channel, uid, fishing) {
 		return
 	}
 	base := time.Duration(s.aiIntSetting(ctx, "ai_fishing_base_interval_ms", 300000, 60000, 1800000)) * time.Millisecond
@@ -188,10 +196,8 @@ func (s *Server) aiFishingForChannel(ctx context.Context, db *store.DB, channel 
 		return
 	}
 
-	// 本角色此刻要不要走「占额再抽样」这一段（DEV-113 A）：
-	//   - 频道里没有生效的播报角色：沿用旧静默节拍，每次抽鱼都计一次配额；
-	//   - 有播报角色：只有本角色可播报且这一档不是普通达标时才占额，
-	//     其余档只写鱼、不占额、不开口。
+	// 每一次上鱼都要先过频道节拍：静默档也占节拍，否则每个 tick 都可能白捡一条。
+	// 节拍通过后再决定「这一次能不能开口」：普通达标、不可播报、配额用完都只写鱼。
 	attempt := true
 	if talkOn {
 		attempt = broadcastable[agent.Key] && ev != evOk
@@ -206,32 +212,33 @@ func (s *Server) aiFishingForChannel(ctx context.Context, db *store.DB, channel 
 		st.fishCount = 0
 		st.interval = base // 新的一小时从基础节拍重新开始
 	}
-	// 无可播报角色时沿用旧行为：每次抽鱼都计一次配额，保持静默上鱼节奏不变。
-	// 有播报角色时只有「可尝试的档」才检查/占用配额，先占额再抽样（原时点）。
-	if !attempt {
-		st.mu.Unlock()
-		// 仍要写库，让「你钓了多少」查得到；只是不发消息、不占配额。
-		s.writeAICatch(ctx, db, agent, fish, loc)
-		return
-	}
-	if st.fishCount >= hourLimit || (!st.lastAt.IsZero() && now.Sub(st.lastAt) < st.interval) {
+	if !st.lastAt.IsZero() && now.Sub(st.lastAt) < st.interval {
 		st.mu.Unlock()
 		return
 	}
-	st.fishCount++
+	// 这一条鱼确定要入库：推进节拍；只有「可尝试且配额未满」才允许开口。
 	st.lastAt = now
 	st.interval = time.Duration(float64(st.interval) * 1.2)
 	if st.interval > maxI {
 		st.interval = maxI
 	}
+	canTalk := attempt && st.fishCount < hourLimit
+	if canTalk {
+		st.fishCount++
+	}
 	st.mu.Unlock()
-	s.noteFishingStage("quota", agent.Key, 0)
+	if canTalk {
+		s.noteFishingStage("quota", agent.Key, 0)
+	}
 
 	// 写渔获 + 推进角色状态 + 星蓝战绩，抽鱼本身与「说不说」无关。
 	if !s.writeAICatch(ctx, db, agent, fish, loc) {
 		return
 	}
-	// 占额之后才做「说还是不说」的抽样：先占额再抽样，回执能把四段分开。
+	if !canTalk {
+		return
+	}
+	// 写库之后再决定「说还是不说」：预算与性格都在 maybeAIFishingTalk 里。
 	seed := aiEventSeed(channel, "fishing|"+agent.Key+"|"+fish.FishKey)
 	if taskID, spoken := s.maybeAIFishingTalk(ctx, db, channel, uid, agent, fish, seed); spoken {
 		s.noteFishingStage("enqueue", agent.Key, taskID)

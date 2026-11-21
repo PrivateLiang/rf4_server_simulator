@@ -140,25 +140,10 @@ func (s *Server) aiIntSetting(ctx context.Context, key string, def, lo, hi int) 
 	return v
 }
 
-// aiGroupCallWords 是「想让所有人一起说」的说法。命中就当圆桌，
-// 不用点名——但依然受冷却与每小时上限约束，不会变成刷屏开关。
-var aiGroupCallWords = []string{
-	"你们", "大家", "各位", "大伙", "都来说", "都说说", "一起聊", "谁能告诉", "谁来说",
-}
-
-func aiGroupCall(msg string) bool {
-	for _, w := range aiGroupCallWords {
-		if strings.Contains(msg, w) {
-			return true
-		}
-	}
-	return false
-}
-
 // maybeTriggerChannelAI 决定一次真人发言要不要惊动 AI：
 //  1. 叫到 ≥2 个助手 → 圆桌（点名优先，不受概率限制）
-//  2. 没叫人但频道里有 ≥2 个助手 → 按 roundtable_on_speech_chance 概率起圆桌
-//  3. 其余情况 → 单人回复；被点名的优先，没人叫就随机挑一个
+//  2. 没有范围内的点名 → 按合资格角色的性格判定是否起圆桌
+//  3. 未起圆桌 → 优先由被点名的角色直接回答，否则按性格选择合资格角色
 //
 // 频道的「热闹」主要交给钓鱼事件（见 ai_fishing.go），这里只在有人说话时接话。
 // 不推任何「本频道有哪些助手」的公告：客户端本来就会在每条消息前显示说话人的名字，
@@ -185,7 +170,7 @@ func (s *Server) maybeTriggerChannelAI(ctx *Ctx, channel, msg string) {
 	}
 
 	if len(mentions) >= 2 {
-		maxSpeakers := s.aiIntSetting(cctx, "roundtable_max_speakers", 3, 2, 3)
+		maxSpeakers := s.aiRoundtableProfile(cctx).Speakers
 		if len(mentions) > maxSpeakers {
 			mentions = mentions[:maxSpeakers]
 		}
@@ -195,18 +180,7 @@ func (s *Server) maybeTriggerChannelAI(ctx *Ctx, channel, msg string) {
 		// 冷却/超次数/资格不足：退回单个 Agent 回复，避免完全不响应。
 	}
 
-	// 说了「你们」「大家」这类群称：先按能力筛出合资格者，再让 T-103 的共享派生
-	// 决定这一次要不要开、由谁起头（沉默也是合法结果）。
-	if len(mentions) == 0 && aiGroupCall(msg) {
-		qualified, rejects := s.aiEventCandidates(cctx, channel, aiconfig.EventRoundtable)
-		s.logEventRejects(channel, aiconfig.EventRoundtable, rejects)
-		if len(qualified) >= 2 && s.startDerivedRoundtable(ctx, channel, msg, qualified, cctx) {
-			return
-		}
-	}
-
-	// 没叫人、但频道里不止一个合资格助手：同样交给 T-103 决定要不要自发聊一轮。
-	// 旧 roundtable_on_speech_chance 不再参与（行为概率归性格）。
+	// 群称和其他未点名的消息共用一次候选筛选与起桌判定。
 	if len(mentions) == 0 {
 		qualified, rejects := s.aiEventCandidates(cctx, channel, aiconfig.EventRoundtable)
 		s.logEventRejects(channel, aiconfig.EventRoundtable, rejects)
@@ -215,7 +189,7 @@ func (s *Server) maybeTriggerChannelAI(ctx *Ctx, channel, msg string) {
 		}
 	}
 
-	// 单人回复：被点名的优先（直接求助不受事件能力限制）；没人叫就随机挑一个
+	// 单人回复：被点名的优先（直接求助不受事件能力限制）；没人叫就按性格挑一个
 	// 合资格角色（只有攻略的角色不会被当替补，见 aiPickSpeaker）。
 	key, contactUID, cooldownMS, ok := "", int64(0), 8000, false
 	direct := false
@@ -306,17 +280,17 @@ func (s *Server) logEventRejects(channel, category string, rejects []aiEventReje
 func (s *Server) startChannelRoundtable(ctx *Ctx, channel, msg string, speakers []store.AIAgent, cctx context.Context) bool {
 	speakers, rejects := s.aiEventGroup(cctx, speakers, aiconfig.EventRoundtable)
 	s.logEventRejects(channel, aiconfig.EventRoundtable, rejects)
-	maxSpeakers := s.aiIntSetting(cctx, "roundtable_max_speakers", 3, 2, 3)
-	if len(speakers) > maxSpeakers {
-		speakers = speakers[:maxSpeakers]
+	rt := s.aiRoundtableProfile(cctx)
+	if len(speakers) > rt.Speakers {
+		speakers = speakers[:rt.Speakers]
 	}
 	if len(speakers) < 2 {
 		return false
 	}
-	maxMS := s.aiIntSetting(cctx, "roundtable_max_ms", 20000, 5000, 30000)
-	cooldownMS := s.aiIntSetting(cctx, "roundtable_cooldown_ms", 120000, 30000, 600000)
-	hourly := s.aiIntSetting(cctx, "roundtable_hourly_limit", 3, 1, 10)
-	if !rtAllow(channel, time.Duration(cooldownMS)*time.Millisecond, hourly) {
+	maxMS := rt.MaxMS
+	cooldownMS := time.Duration(rt.CooldownSec) * time.Second
+	hourly := rt.Hourly
+	if !rtAllow(channel, cooldownMS, hourly) {
 		return false
 	}
 	keys := make([]string, 0, len(speakers))

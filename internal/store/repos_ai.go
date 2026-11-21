@@ -1100,7 +1100,7 @@ func (d *DB) AIEnqueueSystemRoundtable(ctx context.Context, channel string, uid 
 	}
 	return d.aiEnqueueTask(ctx, AITask{
 		Kind: "roundtable", Scope: "channel", ScopeKey: channel, UID: uid,
-		SourceKind: "system", Text: text, Participants: string(parts), DeadlineTS: nowTS() + 60,
+		SourceKind: "system", Text: text, Participants: string(parts), DeadlineTS: nowTS() + 180,
 	}, ev)
 }
 
@@ -3532,7 +3532,8 @@ const (
 	// AITaskEvidenceFormatV1 是 binding_json 的载荷格式版。
 	AITaskEvidenceFormatV1 = 1
 	// AITaskEvidenceMaxParticipants 是有界参与者上限（与圆桌最大发言者一致）。
-	AITaskEvidenceMaxParticipants = 3
+	// 与 aiconfig 共用同一份数值：氛围档最高 10 人，留到 12 的余量。
+	AITaskEvidenceMaxParticipants = aiconfig.RoundtableMaxParticipants
 )
 
 // 证据判定的原因码。字面量集中在这里，GS/BR/回执引用同一份，避免各自发明。

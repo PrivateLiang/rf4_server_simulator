@@ -19,13 +19,13 @@ const COPY = {
   // 虚拟钓鱼
   ai_fishing_enabled: ['让 AI 角色也钓鱼', '', 'AI 角色会在后台模拟钓鱼并积累渔获。关闭后不再上鱼，已有渔获保留。'],
   ai_fishing_talk_enabled: ['钓到鱼时说一句', '', 'AI 角色钓到鱼时，按自己的性格在聊天里说一句。'],
-  ai_fishing_hourly_limit: ['每小时最多说几句', '句', '防止刷屏。只有真正说出口的话才计数。'],
+  ai_fishing_hourly_limit: ['每小时上鱼配额', '次', '只限制可播报档的上鱼尝试，不是说话上限；说话总量看「整体氛围」。'],
   ai_memory_inject: ['记得自己的好成绩', '', '聊天时 AI 知道自己钓到过哪些星级、稀有鱼。关闭不会删除记录。'],
   ai_catch_brief_inject: ['知道自己钓过鱼', '', 'AI 知道自己有渔获，但不会主动报具体数字，玩家问起才说。'],
   ai_memory_recent: ['提起最近几条成绩', '条', ''], ai_memory_best: ['提起最好的几条成绩', '条', ''],
   ai_memory_max_rows: ['最多保留多少条成绩', '条', '超出的旧记录会被清理。'],
-  ai_fishing_base_interval_ms: ['两次说话的基本间隔', '分钟', '每说一次，下次间隔会拉长一点（×1.2）。', 60000],
-  ai_fishing_max_interval_ms: ['间隔最长拉到', '分钟', '', 60000],
+  ai_fishing_base_interval_ms: ['两次上鱼的基本间隔', '分钟', '上鱼节拍，与说话预算无关。', 60000],
+  ai_fishing_max_interval_ms: ['上鱼间隔最长拉到', '分钟', '', 60000],
   ai_fishing_star_weight: ['钓到星级鱼', '', ''], ai_fishing_super_weight: ['钓到蓝色稀有鱼', '', ''],
   ai_fishing_miss_weight: ['钓到没达标的小鱼', '', ''], ai_fishing_near_weight: ['钓到差一点星级的鱼', '', ''],
   ai_fishing_miss_ratio: ['「没达标」的界线', '', '低于星级标准的这个比例算没达标。'],
@@ -33,9 +33,19 @@ const COPY = {
   ai_fishing_talk_super_chance: ['钓到蓝色稀有鱼', '', ''], ai_fishing_talk_star_chance: ['钓到星级鱼', '', ''],
   ai_fishing_talk_near_chance: ['钓到差一点星级的鱼', '', ''], ai_fishing_talk_miss_chance: ['钓到没达标的小鱼', '', ''],
   ai_fishing_roundtable_chance: ['钓到稀有鱼后引发多人聊天', '', '其他 AI 角色接着聊的概率。'],
+  ai_talk_hourly_limit: ['每小时最多说话', '句', '所有角色、所有说话通道合计。'],
+  ai_talk_min_gap_s: ['两条消息至少间隔', '秒', '闲时搭话遵守；上鱼播报可插队。'],
+  ai_talk_burst: ['允许超前说几句', '句', '小时开头或跨时段允许连续说几句。'],
+  ai_talk_roundtable_speakers: ['最多几人接话', '人', '2–12；仅自定义档生效，条数按人数 +2。'],
+  ai_talk_weight_0: ['0–15 分钟权重', '', '0–3；四段归一化后决定说话落在哪个时段。'],
+  ai_talk_weight_1: ['15–30 分钟权重', '', '0–3。'],
+  ai_talk_weight_2: ['30–45 分钟权重', '', '0–3。'],
+  ai_talk_weight_3: ['45–60 分钟权重', '', '0–3。'],
+  ai_idle_silence_min: ['安静多久后搭话', '分钟', '公共频道里没人说话超过这个时间，AI 才可能自己找个话头。'],
+  ai_idle_hourly_limit: ['每小时最多搭话', '句', '闲时搭话的单独上限，仍受「整体氛围」总预算约束。'],
   // 连接
-  web_search_enabled: ['允许联网搜索', '', '默认只用游戏内资料回答。打开后会去外部搜索，需要填写搜索服务地址。'],
-  search_endpoint: ['搜索服务地址', '', ''],
+  web_search_enabled: ['允许联网搜索', '', '角色需另获「联网搜索」能力。本地未命中时才使用选定的搜索方式。'],
+  search_endpoint: ['搜索服务地址', '', '自定义服务须接收 GET 请求的 q 参数。'],
   max_tool_rounds: ['每次回答最多查几轮资料', '轮', '数字越大越可能答准，但回复更慢。'],
 };
 const SCENES = [
@@ -639,20 +649,95 @@ function fishingView() {
     const spec = specFor(key, { unit: '' });
     return form.row(spec, setting(key));
   };
+  // 能力是按角色授予的：没有任何角色勾选时，这组设置不会生效。
+  // 读不到能力目录时返回 null，不冒充「一个都没有」。
+  const idleKeys = () => (S.caps ? (S.agents || []).filter((a) => {
+    const v = S.capByKey[a.key];
+    return !!(v && (v.capabilities || []).includes('idle_chat'));
+  }).map((a) => a.display || a.key) : null);
+  // 把两个数字翻译成一句人话：管理员不用自己算 60 / 句数。
+  const idlePreview = h('p', { class: 'small text-2', style: { marginTop: '2px' } });
+  const refreshIdlePreview = () => {
+    const minutes = Number(form.value('ai_idle_silence_min'));
+    if (!Number.isFinite(minutes) || minutes <= 0) { idlePreview.textContent = ''; return; }
+    idlePreview.textContent = `效果：距上次上鱼超过 1 分钟、频道安静约 ${minutes} 分钟后，由上面「说话节奏」决定最多说几句。`;
+  };
+  // 说话节奏：预设数字来自后端 talk_moods，前端不维护第二份预算表。
+  const moods = (S.status && S.status.talk_moods) || [];
+  const moodRow = moods.length
+    ? form.row({
+      key: 'ai_fishing_mood', label: '整体氛围', kind: 'select',
+      options: [...moods.map((m) => [m.id, m.label]), ['custom', '自定义']],
+      help: '频道里所有 AI 角色合计；上鱼播报优先，闲时搭话只用剩余额度。',
+    }, setting('ai_fishing_mood') || 'normal')
+    : null;
+  const talkPreview = h('p', { class: 'small text-2', style: { marginTop: '2px' } });
+  const talkTip = h('p', { class: 'small muted', style: { marginTop: '4px' } },
+    '接话人数随氛围：冷清 3 / 正常 5 / 热闹 10 / 不限全部。实际取频道内已授权、当前可接话的角色数；闲时搭话还要求正在钓鱼。圆桌按一次事件计 1 格预算。');
+  const customTalk = h('details', { class: 'advanced', hidden: true },
+    h('summary', {}, '自定义节奏', h('small', { text: '（只有「自定义」档生效）' })),
+    h('div', {},
+      row('ai_talk_hourly_limit'), row('ai_talk_min_gap_s'), row('ai_talk_burst'),
+      row('ai_talk_roundtable_speakers'),
+      h('p', { class: 'muted small', style: { padding: '8px 0' }, text: '四段权重决定说话落在小时的哪个时段；全 0 会退回均匀。' }),
+      row('ai_talk_weight_0'), row('ai_talk_weight_1'), row('ai_talk_weight_2'), row('ai_talk_weight_3')));
+  const refreshTalkPreview = () => {
+    if (!moodRow) { customTalk.hidden = true; return; }
+    const id = form.value('ai_fishing_mood');
+    const preset = moods.find((m) => m.id === id);
+    if (preset) {
+      const rt = preset.roundtable_speakers ? `；一次圆桌最多 ${preset.roundtable_speakers} 人、${preset.roundtable_turns} 条` : '';
+      if (preset.budget > 0) {
+        talkPreview.textContent = `${preset.label}：每小时最多约 ${preset.budget} 句，两条消息至少间隔 ${Math.round(preset.min_gap_s / 60)} 分钟${rt}。`;
+      } else {
+        talkPreview.textContent = `${preset.label}：不设每小时上限，两条消息至少间隔 ${Math.max(1, Math.round(preset.min_gap_s / 60))} 分钟${rt}；模型调用会明显增加。`;
+      }
+    } else if (id === 'custom') {
+      const b = Number(form.value('ai_talk_hourly_limit'));
+      const g = Number(form.value('ai_talk_min_gap_s'));
+      const sp = Number(form.value('ai_talk_roundtable_speakers'));
+      const rt = Number.isFinite(sp) && sp >= 2 ? `；一次圆桌最多 ${sp} 人、${Math.min(16, sp + 2)} 条` : '';
+      talkPreview.textContent = Number.isFinite(b) && b > 0
+        ? `自定义：每小时最多 ${b} 句${Number.isFinite(g) && g > 0 ? `，至少间隔 ${Math.round(g / 6) / 10} 分钟` : ''}${rt}。`
+        : '';
+    } else {
+      talkPreview.textContent = '';
+    }
+    customTalk.hidden = id !== 'custom';
+    if (id === 'custom') customTalk.open = true;
+  };
+  const idleChange = form.onChange;
+  form.onChange = (f) => { idleChange?.(f); refreshTalkPreview(); refreshIdlePreview(); };
+  const idleStatus = () => {
+    const keys = idleKeys();
+    if (keys === null) return null; // 能力目录读取失败：不猜
+    if (keys.length === 0) return callout('info', '还没有角色开启「闲时搭话」。到「角色 → 能力」勾选后，这里的设置才会生效。');
+    return h('p', { class: 'small muted', text: `已开启：${keys.join('、')}` });
+  };
+  const idleBody = h('div', {}, idleStatus(), row('ai_idle_silence_min'), idlePreview);
+  refreshTalkPreview();
+  refreshIdlePreview();
   return h('div', {},
-    section({ title: '基本', body: h('div', {}, row('ai_fishing_enabled'), row('ai_fishing_talk_enabled'), row('ai_fishing_hourly_limit')) }),
+    section({ title: '基本', body: h('div', {}, row('ai_fishing_enabled')) }),
+    section({
+      title: '说话节奏',
+      desc: '决定频道里一小时总共能听到几句。四档预设直接选；想细调再选「自定义」。',
+      body: h('div', {}, moodRow, talkPreview, talkTip, customTalk),
+    }),
+    section({
+      title: '闲时搭话',
+      desc: '没鱼、也没人说话的时候，AI 可以自己找个话头。需要先打开上面的「虚拟钓鱼」；每个角色还要在「角色 → 能力」里勾选「闲时搭话」。',
+      body: idleBody,
+    }),
     section({ title: '记忆', desc: '聊天时 AI 会不会提起自己的钓鱼成绩。', body: h('div', {}, row('ai_catch_brief_inject'), row('ai_memory_inject'),
       h('details', { class: 'advanced' }, h('summary', {}, '更多记忆设置'), h('div', {}, row('ai_memory_recent'), row('ai_memory_best'), row('ai_memory_max_rows')))) }),
     section({
       title: '高级', desc: '一般不需要修改。',
       body: h('div', {},
-        h('details', { class: 'advanced' }, h('summary', {}, '说话节奏'), h('div', {}, row('ai_fishing_base_interval_ms'), row('ai_fishing_max_interval_ms'))),
+        h('details', { class: 'advanced' }, h('summary', {}, '上鱼节拍'), h('div', {}, row('ai_fishing_base_interval_ms'), row('ai_fishing_max_interval_ms'))),
         h('details', { class: 'advanced' }, h('summary', {}, '钓到什么鱼 ', h('small', { text: '（各类鱼所占比例，0–1）' })),
           h('div', {}, h('p', { class: 'muted small', style: { padding: '8px 0' }, text: '决定 AI 角色的渔获里各类鱼占多少。数值是比例，例如 0.02 表示约 2%。' }),
-            ratioRow('ai_fishing_star_weight'), ratioRow('ai_fishing_super_weight'), ratioRow('ai_fishing_near_weight'), ratioRow('ai_fishing_miss_weight'), ratioRow('ai_fishing_near_ratio'), ratioRow('ai_fishing_miss_ratio'))),
-        h('details', { class: 'advanced' }, h('summary', {}, '钓到鱼时开口的概率 ', h('small', { text: '（0–1）' })),
-          h('div', {}, h('p', { class: 'muted small', style: { padding: '8px 0' }, text: '打开「钓到鱼时说一句」后，不同的鱼开口的概率。1 表示每次都说。' }),
-            ratioRow('ai_fishing_talk_super_chance'), ratioRow('ai_fishing_talk_star_chance'), ratioRow('ai_fishing_talk_near_chance'), ratioRow('ai_fishing_talk_miss_chance'), ratioRow('ai_fishing_roundtable_chance')))),
+            ratioRow('ai_fishing_star_weight'), ratioRow('ai_fishing_super_weight'), ratioRow('ai_fishing_near_weight'), ratioRow('ai_fishing_miss_weight'), ratioRow('ai_fishing_near_ratio'), ratioRow('ai_fishing_miss_ratio')))),
     }));
 }
 

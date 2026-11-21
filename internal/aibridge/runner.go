@@ -1154,6 +1154,21 @@ func (r *Runner) catchLine(ctx context.Context, agentKey string) string {
 	return trimRunes("你查了自己的渔获记录："+strings.Join(parts, "；")+"。", 180)
 }
 
+// roundtableProfile 把氛围档解析成圆桌人数/条数/冷却/时限；custom 只多读
+// 一个「最多几人接话」，与 gameserver 共用 aiconfig 的同一份解析。
+func (r *Runner) roundtableProfile(ctx context.Context) aiconfig.RoundtableProfile {
+	mood := r.db.AISetting(ctx, "ai_fishing_mood", "normal")
+	if mood == aiconfig.TalkMoodCustom {
+		speakers := r.intSetting(ctx, "ai_talk_roundtable_speakers", 5, 2, aiconfig.RoundtableMaxParticipants)
+		return aiconfig.CustomRoundtableProfile(speakers)
+	}
+	if p, ok := aiconfig.TalkMoodRoundtable(mood); ok {
+		return p
+	}
+	p, _ := aiconfig.TalkMoodRoundtable("normal")
+	return p
+}
+
 func (r *Runner) intSetting(ctx context.Context, key string, def, lo, hi int) int {
 	v, err := strconv.Atoi(r.db.AISetting(ctx, key, strconv.Itoa(def)))
 	if err != nil {
@@ -1414,13 +1429,14 @@ func (r *Runner) handleRoundtable(ctx context.Context, t *store.AITask) {
 	budget := r.contextBudget(ctx, profileRoundtable)
 	replyChars := r.replyChars(ctx, profileRoundtable)
 	softChars := r.replySoftChars(ctx, profileRoundtable)
-	maxSpeakers := r.intSetting(ctx, "roundtable_max_speakers", 3, 2, 3)
+	rt := r.roundtableProfile(ctx)
+	maxSpeakers := rt.Speakers
 	cfg := rtConfig{
-		maxTurns:  r.intSetting(ctx, "roundtable_max_turns", 6, 2, 6),
+		maxTurns:  rt.Turns,
 		maxStreak: r.intSetting(ctx, "roundtable_max_streak", 3, 1, 6),
 		gap:       time.Duration(r.intSetting(ctx, "roundtable_gap_ms", 3000, 500, 10000)) * time.Millisecond,
 	}
-	maxMS := r.intSetting(ctx, "roundtable_max_ms", 20000, 5000, 30000)
+	maxMS := rt.MaxMS
 	if len(keys) > maxSpeakers {
 		keys = keys[:maxSpeakers]
 	}

@@ -758,6 +758,8 @@ func hSocialPublic(ctx *Ctx) ([]byte, bool) {
 	}
 	ch := sessChannel(ctx.Sess)
 	srv := ctx.Sess.Srv
+	// 闲时搭话的静默计时只认真人消息：AI 自己的发言不经过这里。
+	srv.noteAIHumanMessage(ch.Name)
 	command := srv.handleAIChannelCommand(ctx, msg, ch.Name)
 	// 外层 locationId 发空串：客户端 peilhchjenn 对频道名做严格相等校验，
 	// 带 [CN] 或 sessChannel 默认名都不匹配当前标签页而被静默丢弃；空串

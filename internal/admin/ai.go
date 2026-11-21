@@ -920,6 +920,8 @@ func (s *Server) handleAIStatus(w http.ResponseWriter, r *http.Request) {
 		},
 		"saved_display": savedDisplay,
 		"onboarding":    onboarding,
+		// 说话节奏预设：页面只渲染，不自己维护一份预算数字。
+		"talk_moods": aiconfig.TalkMoodPresets(),
 	})
 }
 
